@@ -1,5 +1,18 @@
 # 환경 변수 파일 제외
 .env
+.env.local
+.env.*.local
 
-# node_modules 제외
+# 의존성 캐시
 node_modules/
+
+# Vite 캐시
+.vite/
+
+# 빌드 결과물
+dist/
+
+# macOS, Windows, VS Code 같은 환경에서 생기는 파일
+.DS_Store
+Thumbs.db
+.vscode/
