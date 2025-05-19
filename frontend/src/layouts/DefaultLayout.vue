@@ -1,7 +1,9 @@
 <template>
     <div class="layout">
         <header class="header">
-            <div class="logo">SSU-TUDY</div>
+            <div class="logo">
+                <a href="/" class="logo-link">SSU-TUDY</a>
+            </div>
             <div class="header-right">
                 <span v-if="!state.isLoggedIn" @click="openLoginModal" class="clickable">로그인</span>
                 <span v-else>
@@ -15,6 +17,37 @@
         <main class="main">
             <slot />
         </main>
+
+        <footer class="footer">
+            <h3 class="footer-section-title">자주 찾는 학교 사이트</h3>
+            <div class="footer-links-grid-vertical">
+                <!-- 1열 -->
+                <div class="footer-col">
+                    <a href="https://saint.ssu.ac.kr/irj/portal" target="_blank" rel="noopener">유세인트</a>
+                    <a href="https://canvas.ssu.ac.kr/" target="_blank" rel="noopener">스마트캠퍼스 LMS</a>
+                </div>
+                <!-- 2열 -->
+                <div class="footer-col">
+                    <a href="https://scatch.ssu.ac.kr/%ea%b3%b5%ec%a7%80%ec%82%ac%ed%95%ad/?f&category=%ED%95%99%EC%82%AC&keyword" target="_blank" rel="noopener">학사 공지사항</a>
+                    <a href="https://fun.ssu.ac.kr/" target="_blank" rel="noopener">비교과(FUN) 시스템</a>
+                </div>
+                <!-- 3열 -->
+                <div class="footer-col">
+                    <a href="https://counsel.ssu.ac.kr/" target="_blank" rel="noopener">학생상담센터</a>
+                    <a href="https://job.ssu.ac.kr/" target="_blank" rel="noopener">취업진로센터</a>
+                </div>
+                <!-- 4열 -->
+                <div class="footer-col">
+                    <a href="https://oasis.ssu.ac.kr/library-services/smuf/reading-rooms" target="_blank" rel="noopener">도서관 열람실/좌석 예약</a>
+                    <a href="https://oasis.ssu.ac.kr/library-services/smuf/rooms" target="_blank" rel="noopener">도서관 세미나실/공간 예약</a>
+                </div>
+            </div>
+            <div class="footer-content">
+                &copy; 2025 SSU-TUDY. All rights reserved.
+            </div>
+        </footer>
+
+
 
         <!-- 사이드 패널 -->
         <div class="side-panel" :class="{ open: state.showPanel }">
@@ -129,9 +162,51 @@
 
                     <button type="button" class="login-btn" @click="login">로그인</button>
                 </div>
-                <p>계정이 없으신가요? <a href="/register">회원가입</a></p>
+                <p>계정이 없으신가요? <a href="#" @click.prevent="openRegisterModal">회원가입</a></p>
             </div>
         </div>
+
+        <div v-if="state.showRegister" class="modal" @click.self="closeRegisterModal">
+            <div class="modal-content">
+                <button class="close-btn" @click="closeRegisterModal">❌</button>
+                <h2>회원가입</h2>
+
+                <template v-if="state.registerStep === 1">
+                    <label>ID</label>
+                    <div class="field">
+                        <input type="text" v-model="state.register.id" />
+                        <button class="small-btn" @click="checkDuplicateId">아이디 확인</button>
+                    </div>
+
+                    <label>PW</label>
+                    <input type="password" v-model="state.register.pw" />
+
+                    <button class="login-btn" @click="checkIdAndNextStep">다음</button>
+                </template>
+
+                <template v-else>
+                    <label>닉네임 *</label>
+                    <input type="text" v-model="state.register.nickname" placeholder="슝슝이25" />
+
+                    <label>학번 *</label>
+                    <input type="text" v-model="state.register.studentId" placeholder="20252025" />
+
+                    <label>전공 *</label>
+                    <input type="text" v-model="state.register.major" placeholder="AI융합학과" />
+
+                    <label>알림 해시태그 (선택)</label>
+                    <div class="hashtags">
+                        <div v-for="(tag, index) in state.register.hashtags" :key="index" class="tag-input">
+                            <input v-model="state.register.hashtags[index]" />
+                        </div>
+                        <button @click="state.register.hashtags.push('')">+ 해시태그 추가</button>
+                    </div>
+
+                    <button class="login-btn" @click="submitRegister">제출</button>
+                </template>
+            </div>
+        </div>
+
 
         <!-- 채팅방 -->
         <div v-if="state.showChatPopup" class="chat-popup" ref="chatPopupRef">
@@ -192,6 +267,17 @@ const state = reactive({
     userName: '',
     id: '',
     pw: '',
+    showRegister: false, // 회원가입 모달
+    registerStep: 1,     // 1단계: ID/PW, 2단계: 프로필
+    checkDuplicateFlag: false,
+    register : {
+        id: '',
+        pw: '',
+        nickname: '',
+        studentId: '',
+        major: '',
+        hashtags: ['']
+    },
     showPanel: false,
     panelType: '', // 'alarm' 'chat' 'profile'
     alarms: [],
@@ -245,13 +331,6 @@ const getProfileColor = (id) => {
 // 프로필 원 안에 보여줄 이니셜 (닉네임 첫글자)
 const getProfileInitial = (id) => {
   return userMap[id]?.nickname.charAt(0).toUpperCase() || '?'
-}
-
-// 마우스오버 시 보여줄 툴팁
-const getProfileTooltip = (id) => {
-    const user = userMap[id]
-    return user ? `${user.nickname} (${user.studentId})` : '알 수 없음'
-
 }
 
 onMounted(() => {
@@ -327,6 +406,76 @@ function closeLoginModal() {
     state.id = ''
     state.pw = ''
 }
+
+function openRegisterModal() {
+    state.showLogin = false
+    state.showRegister = true
+    state.registerStep = 1
+    state.register = {
+        id: '',
+        pw: '',
+        nickname: '',
+        studentId: '',
+        major: '',
+        hashtags: ['']
+    }
+}
+function closeRegisterModal() {
+    state.showRegister = false
+    state.register = {
+        id: '',
+        pw: '',
+        nickname: '',
+        studentId: '',
+        major: '',
+        hashtags: ['']
+    }
+}
+
+function checkIdAndNextStep() {
+    if (!state.checkDuplicateFlag) {
+        alert("아이디 확인을 해주세요.")
+        return
+    }
+    const { id, pw } = state.register
+    if (!id.trim() || !pw.trim()) {
+        alert("ID와 PW는 필수입니다.")
+        return
+    }
+
+    state.registerStep = 2
+}
+
+function checkDuplicateId() {
+    const id = state.register.id.trim()
+    if (!id) {
+        alert("ID를 입력해주세요.")
+        return
+    }
+
+    if (id === 'existingUser') {
+        alert("이미 존재하는 ID입니다.")
+    } else {
+        alert("사용 가능한 ID입니다.")
+        state.checkDuplicateFlag = true;
+    }
+}
+
+function submitRegister() {
+    const { nickname, studentId, major } = state.register
+    if (!nickname.trim() || !studentId.trim() || !major.trim()) {
+        alert("닉네임, 학번, 전공은 필수입니다.")
+        return
+    }
+
+    // 💡 회원가입 처리 mock
+    console.log("회원가입 완료:", state.register)
+
+    alert("회원가입이 완료되었습니다.")
+    state.showRegister = false
+    state.showLogin = true
+}
+
 function login() {
     var logid = state.id.trim()
     var logpw = state.pw.trim()
@@ -438,28 +587,57 @@ function formatTime(date) {
 </script>
 
 <style>
-    
+    html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow-x: hidden;
+    }
+
     *:not(input):not(textarea) {
         caret-color: transparent;
     }
     .layout {
         display: flex;
         flex-direction: column;
-        height: 100vh;
+        min-height: 100vh; /* 전체 페이지 높이 */
     }
+
+    .main {
+        padding: 20px;
+        flex: 1; /* 남은 공간만 차지 */
+        /* ❌ overflow-y 제거 */
+    }
+
     .header {
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+        height: 64px;
+        min-height: 64px;
+        max-height: 64px;
+        background-color: #fff !important;
+        box-sizing: border-box;
         display: flex;
-        justify-content: space-between;
         align-items: center;
-        padding: 12px 24px;
-        background-color: #fff;
+        justify-content: space-between;
+        padding: 0 24px;
         border-bottom: 1px solid #ddd;
+        transition: none !important;
     }
+
     .logo {
         font-weight: bold;
         font-size: 20px;
         color: #42b983;
     }
+    .logo-link {
+        color: #42b983;
+        font-weight: bold;
+        font-size: 20px;
+        text-decoration: none;
+    }
+
     .header-right {
         display: flex;
         align-items: center;
@@ -474,11 +652,6 @@ function formatTime(date) {
     .clickable {
         cursor: pointer;
         text-decoration: underline;
-    }
-    .main {
-        padding: 20px;
-        flex: 1;
-        overflow-y: auto;
     }
     /* 사이드 패널 */
     .side-panel {
@@ -904,6 +1077,74 @@ function formatTime(date) {
     /* 다른 사람이 보낸 메시지: 왼쪽 정렬 */
     .chat-msg-container.theirs .chat-time {
         align-self: flex-start;
+    }
+
+    .footer {
+        padding: 16px;
+        background-color: #f9f9f9;
+        border-top: 1px solid #ddd;
+        font-size: 14px;
+        color: #666;
+    }
+
+    .footer-section-title {
+        text-align: left;
+        font-size: 16px;
+        font-weight: 600;
+        color: #444;
+        margin-bottom: 20px;
+        padding-left: 100px;
+    }
+
+    .footer-links-grid-vertical {
+        display: flex;
+        justify-content: flex-start;         /* 전체 열을 가운데 정렬 */
+        gap: 20px 160px;                       /* 행,열 간격 */
+        flex-wrap: wrap;                /* 줄바꿈 가능 (반응형 대비) */
+        padding-bottom: 20px;
+        padding-left: 100px;
+    }
+
+    .footer-col {
+        display: flex;
+        flex-direction: column;         /* 열 내부는 세로 정렬 */
+        gap: 10px;                      /* 항목 간 간격 */
+        min-width: 180px;               /* 최소 열 너비 */
+    }
+
+    .footer-col a {
+        color: #42b983;
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.2s;
+        padding-left: 4px;              /* 항목 내부 여백 약간 추가 */
+    }
+
+    .footer-col a:hover {
+        color: #2c8f6e;
+    }
+
+    .footer-content {
+        text-align: center;
+        color: #999;
+        font-size: 13px;
+        margin-top: 12px;
+    }
+
+    .small-btn {
+        padding: 6px 10px;
+        font-size: 13px;
+        margin-left: 8px;
+        background-color: #42b983;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+
+    .small-btn:hover {
+        background-color: #369f6b;
     }
 
 

@@ -6,6 +6,7 @@
     },
     "dependencies": {
         "vue": "^3.3.8",
+        "vue-masonry-css": "^1.0.3",
         "vue-router": "^4.5.1"
     },
     "devDependencies": {
