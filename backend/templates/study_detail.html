@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Study Detail</title>
+    <style>
+      .flash-message {
+        background-color: #e0ffe0;
+        padding: 10px;
+        margin-bottom: 15px;
+        border: 1px solid #a0dca0;
+        border-radius: 5px;
+        color: #2d662d;
+      }
+    </style>
+</head>
+<body>
+
+    <!-- ✅ Flash 메시지 표시 -->
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash-message">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <h2>{{ study['title'] }}</h2>
+    <p>{{ study['description'] }}</p>
+    <p>Hashtags: {{ study['hashtags'] }}</p>
+    <p>Open Kakao Link: {{ study['open_kakao_link'] }}</p>
+    <p>Max Members: {{ study['max_members'] }}</p>
+
+    {% if is_author %}
+        <a href="{{ url_for('study_edit', study_id=study_id) }}">✏️ Edit</a>
+        <form method="POST" action="{{ url_for('delete_study', study_id=study_id) }}" style="display:inline;">
+            <button type="submit">🗑️ Delete</button>
+        </form>
+    {% else %}
+        <!-- ✅ 신청 버튼 (작성자 아닌 경우에만) -->
+        <form method="POST" action="{{ url_for('apply_to_study', study_id=study_id) }}">
+            <button type="submit">📩 스터디 신청하기</button>
+        </form>
+    {% endif %}
+
+    <h3>💬 Comments</h3>
+    <ul>
+        {% for comment in comments %}
+            <li>
+                <strong>{{ comment['login_id'] }}</strong> ({{ comment['created_at'] }}): {{ comment['content'] }}
+                {% if session['user_id'] == comment['author_id'] %}
+                    <a href="{{ url_for('edit_comment', study_id=study_id, comment_id=comment['comment_id']) }}">✏️ Edit</a>
+                    <form method="POST" action="{{ url_for('delete_comment', study_id=study_id, comment_id=comment['comment_id']) }}" style="display:inline;">
+                        <button type="submit">🗑️ Delete</button>
+                    </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+
+    <h4>📝 Add a Comment</h4>
+    <form method="POST" action="{{ url_for('add_comment', study_id=study_id) }}">
+        <textarea name="content" placeholder="Write your comment..." required></textarea><br>
+        <button type="submit">댓글 등록</button>
+    </form>
+
+    <p><a href="{{ url_for('study_list') }}">← Back to Study List</a></p>
+    <a href="{{ url_for('chat', study_id=study_id) }}">💬 Go to Chat Room</a>
+
+</body>
+</html>

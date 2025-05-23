@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>회원가입</title>
+</head>
+<body>
+  <h2>회원가입</h2>
+  <form id="register-form">
+    아이디: 
+    <input type="text" name="login_id" id="login_id" required>
+    <button type="button" onclick="checkId()">아이디 중복 확인</button><br />
+
+    비밀번호: <input type="password" name="password" required><br />
+    이름: <input type="text" name="name" required><br />
+    학과: <input type="text" name="major"><br />
+    학번: <input type="text" name="student_id"><br />
+
+    해시태그:
+    <div id="hashtag-container">
+      <input type="text" id="hashtag-input" placeholder="#AI, #Web 등">
+      <button type="button" onclick="addHashtag()">추가</button>
+      <ul id="hashtag-list"></ul>
+    </div>
+
+    <button type="submit">회원가입 완료</button>
+  </form>
+
+  <p><a href="/">로그인 화면으로</a></p>
+
+  <script>
+    let idChecked = false;
+    let hashtags = [];
+
+    function checkId() {
+      const login_id = document.getElementById('login_id').value;
+      if (!login_id) return alert("아이디를 입력해주세요.");
+
+      fetch('/check-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login_id })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.exists) {
+          alert("이미 사용 중인 아이디입니다.");
+          idChecked = false;
+        } else {
+          alert("사용 가능한 아이디입니다.");
+          idChecked = true;
+        }
+      });
+    }
+
+    function addHashtag() {
+      const input = document.getElementById('hashtag-input');
+      const value = input.value.trim();
+      if (value && !hashtags.includes(value)) {
+        hashtags.push(value);
+        renderHashtagList();
+        input.value = '';
+      }
+    }
+
+    function removeHashtag(index) {
+      hashtags.splice(index, 1);
+      renderHashtagList();
+    }
+
+    function renderHashtagList() {
+      const list = document.getElementById('hashtag-list');
+      list.innerHTML = '';
+      hashtags.forEach((tag, idx) => {
+        const li = document.createElement('li');
+        li.textContent = tag + ' ';
+        const btn = document.createElement('button');
+        btn.textContent = '삭제';
+        btn.onclick = () => removeHashtag(idx);
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+    }
+
+    document.getElementById('register-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+
+      if (!idChecked) {
+        return alert("아이디 중복 확인을 먼저 해주세요.");
+      }
+
+      const formData = {
+        login_id: e.target.login_id.value,
+        password: e.target.password.value,
+        name: e.target.name.value,
+        major: e.target.major.value,
+        student_id: e.target.student_id.value,
+        hashtags: hashtags.join(','),
+        id_checked: true
+      };
+
+      const res = await fetch('/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+
+      const result = await res.json();
+      if (res.ok) {
+        alert("회원가입 성공!");
+        window.location.href = '/';  // 로그인 페이지로 이동
+      } else {
+        alert(result.error || "회원가입 실패");
+      }
+    });
+  </script>
+</body>
+</html>

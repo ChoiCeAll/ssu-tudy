@@ -1,2 +1,4 @@
 flask==3.1.0
-mysql-connector-python
+flask_mysqldb
+flask-socketio
+eventlet

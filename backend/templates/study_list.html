@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Study List</title>
+</head>
+<body>
+    <h2>📚 Study List</h2>
+
+    <div style="margin-bottom: 20px;">
+        <a href="/mypage"><button>👤 마이페이지</button></a>
+        <a href="/notifications"><button>🔔 알림</button></a>
+        <a href="{{ url_for('study_create') }}"><button>➕ 스터디 생성</button></a>
+        <a href="{{ url_for('login_page') }}"><button>🏠 홈으로</button></a>
+    </div>
+
+    <!-- ✅ 검색 + 정렬 -->
+    <form method="GET" action="{{ url_for('study_list') }}">
+        <input type="text" name="keyword" placeholder="제목 또는 설명 검색" value="{{ keyword or '' }}">
+        <input type="text" name="hashtag" placeholder="해시태그 검색 (예: #AI)" value="{{ hashtag or '' }}">
+        <select name="sort">
+            <option value="recent" {% if sort == 'recent' %}selected{% endif %}>최신순</option>
+            <option value="title" {% if sort == 'title' %}selected{% endif %}>제목순</option>
+        </select>
+        <button type="submit">검색</button>
+    </form>
+
+    <h3>✅ 내가 만든 스터디</h3>
+    <ul>
+        {% if my_studies %}
+            {% for study in my_studies %}
+                <li>
+                    <a href="{{ url_for('study_detail', study_id=study['study_id']) }}">{{ study['title'] }}</a> - {{ study['description'] }}
+                </li>
+            {% endfor %}
+        {% else %}
+            <li>생성한 스터디가 없습니다.</li>
+        {% endif %}
+    </ul>
+
+    <h3>🌐 다른 사용자가 만든 스터디</h3>
+    <ul>
+        {% if other_studies %}
+            {% for study in other_studies %}
+                <li>
+                    <a href="{{ url_for('study_detail', study_id=study['study_id']) }}">{{ study['title'] }}</a> - {{ study['description'] }}
+                </li>
+            {% endfor %}
+        {% else %}
+            <li>다른 사용자의 스터디가 없습니다.</li>
+        {% endif %}
+    </ul>
+</body>
+</html>

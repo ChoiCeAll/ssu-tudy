@@ -7,6 +7,7 @@
             <div class="header-right">
                 <span v-if="!state.isLoggedIn" @click="openLoginModal" class="clickable">로그인</span>
                 <span v-else>
+                    <span class="clickable" @click="logout">로그아웃</span>
                     <span class="icon clickable" @click="togglePanel('alarm')">🔔</span>
                     <span class="icon clickable" @click="togglePanel('chat')">💬</span>
                     <span class="icon clickable" @click="togglePanel('profile')">👤</span>
@@ -80,11 +81,20 @@
                         <span>😌 모든 것이 평온해요. 알림이 없습니다.</span>
                     </template>
                     <template v-else>
-                        <ul>
-                            <li v-for="alarm in state.alarms" :key="alarm.id">{{ alarm.message }}</li>
-                        </ul>
+                        <div class="alarm-list">
+                            <div
+                                class="alarm-item"
+                                v-for="alarm in state.alarms"
+                                :key="alarm.id"
+                                :class="{ unread: !alarm.is_read }"
+                            >
+                                <div class="alarm-message">{{ alarm.message }}</div>
+                                <div class="alarm-time">{{ alarm.time }}</div>
+                            </div>
+                        </div>
                     </template>
                 </div>
+
                 <div v-else-if="state.panelType === 'chat'">
                     <div class="chat-room-list">
                         <div
@@ -101,7 +111,7 @@
                     <div class="profile-item">
                         <label>닉네임</label>
                         <div class="field">
-                            <input v-if="state.editMode" v-model="state.profile.nickname" />
+                            <input v-if="state.editMode" v-model="state.editProfile.nickname" />
                             <span v-else>{{ state.profile.nickname }}</span>
                         </div>
                     </div>
@@ -109,7 +119,7 @@
                     <div class="profile-item">
                         <label>학번</label>
                         <div class="field">
-                            <input v-if="state.editMode" v-model="state.profile.studentId" />
+                            <input v-if="state.editMode" v-model="state.editProfile.studentId" />
                             <span v-else>{{ state.profile.studentId }}</span>
                         </div>
                     </div>
@@ -117,7 +127,7 @@
                     <div class="profile-item">
                         <label>전공</label>
                         <div class="field">
-                            <input v-if="state.editMode" v-model="state.profile.major" />
+                            <input v-if="state.editMode" v-model="state.editProfile.major" />
                             <span v-else>{{ state.profile.major }}</span>
                         </div>
                     </div>
@@ -125,11 +135,17 @@
                     <div class="profile-item">
                         <label>알림 해시태그</label>
                         <div class="hashtags">
-                            <div v-for="(tag, index) in state.hashtags" :key="index" class="tag-input">
-                                <input v-if="state.editMode" v-model="state.hashtags[index]" />
-                                <span v-else>{{ state.hashtags[index] }}</span>
-                            </div>
-                            <button @click="addHashtag">+ 해시태그 추가</button>
+                            <template v-if="state.editMode">
+                                <div v-for="(tag, index) in state.editProfile.hashtagList" :key="index" class="tag-input">
+                                    <input v-model="state.editProfile.hashtagList[index]" />
+                                </div>
+                                <button @click="addHashtag">+ 해시태그 추가</button>
+                            </template>
+                            <template v-else>
+                                <div v-for="(tag, index2) in state.profile.hashtagList" :key="index2" class="tag-input">
+                                    <span>{{ state.profile.hashtagList[index2] }}</span>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
@@ -162,7 +178,10 @@
 
                     <button type="button" class="login-btn" @click="login">로그인</button>
                 </div>
-                <p>계정이 없으신가요? <a href="#" @click.prevent="openRegisterModal">회원가입</a></p>
+                <div>
+                    <p style="text-align: left;">계정이 없으신가요? <a href="#" @click.prevent="openRegisterModal">회원가입</a></p>
+                    <p style="text-align: left;">비밀번호를 잊으셨나요? <a href="#" @click.prevent="openResetModal">비밀번호 재설정</a></p>
+                </div>                
             </div>
         </div>
 
@@ -196,10 +215,10 @@
 
                     <label>알림 해시태그 (선택)</label>
                     <div class="hashtags">
-                        <div v-for="(tag, index) in state.register.hashtags" :key="index" class="tag-input">
-                            <input v-model="state.register.hashtags[index]" />
+                        <div v-for="(tag, index) in state.register.hashtagList" :key="index" class="tag-input">
+                            <input v-model="state.register.hashtagList[index]" />
                         </div>
-                        <button @click="state.register.hashtags.push('')">+ 해시태그 추가</button>
+                        <button @click="addRegisterHashtag">+ 해시태그 추가</button>
                     </div>
 
                     <button class="login-btn" @click="submitRegister">제출</button>
@@ -207,6 +226,24 @@
             </div>
         </div>
 
+        <!-- 비밀번호 재설정 모달 -->
+        <div v-if="state.showReset" class="modal" @click.self="closeResetModal">
+            <div class="modal-content">
+                <button class="close-btn" @click="closeResetModal">❌</button>
+                <h2>비밀번호 재설정</h2>
+
+                <label>ID</label>
+                <input type="text" v-model="state.reset.login_id" />
+
+                <label>학번</label>
+                <input type="text" v-model="state.reset.student_id" />
+
+                <label>새 비밀번호</label>
+                <input type="password" v-model="state.reset.new_password" />
+
+                <button class="login-btn" @click="resetPassword">비밀번호 변경</button>
+            </div>
+        </div>
 
         <!-- 채팅방 -->
         <div v-if="state.showChatPopup" class="chat-popup" ref="chatPopupRef">
@@ -257,7 +294,10 @@
 
 <script setup>
 import { reactive, onMounted, ref, nextTick, watchEffect } from 'vue'
+import { useToast } from 'vue-toastification'
+import axios from 'axios'
 
+const toast = useToast()
 const chatPopupRef = ref(null)
 const chatHeaderRef = ref(null)
 
@@ -276,25 +316,25 @@ const state = reactive({
         nickname: '',
         studentId: '',
         major: '',
-        hashtags: ['']
+        hashtags: '',
+        hashtagList: ['#']
     },
     showPanel: false,
     panelType: '', // 'alarm' 'chat' 'profile'
     alarms: [],
     profile: {
-        nickname: 'choi123',
-        studentId: '20231234',
-        major: 'AI융합학과'
-    },
-    editMode: false,
-    hashtags: ['#성실함', '#프론트엔드'],
-    originProfile: {
         nickname: '',
         studentId: '',
-        major: ''
+        major: '',
+        hashtagList: ['#']
     },
-    originHashtags: [],
-
+    editMode: false,
+    editProfile: {
+        nickname: '',
+        studentId: '',
+        major: '',
+        hashtagList: ['#']
+    },
     //일단 mock
     chatRooms: [
         { id: 1, name: 'AI융합스터디' },
@@ -312,7 +352,14 @@ const state = reactive({
         ]
     },
     newMessage: '',
-    userId : 1
+    userId: '',
+    userName: '',
+    showReset: false, // 비밀번호 재설정 모달
+    reset: {
+        login_id: '',
+        student_id: '',
+        new_password: ''
+    }
 })
 
 // Mock: 사용자 정보
@@ -333,7 +380,17 @@ const getProfileInitial = (id) => {
   return userMap[id]?.nickname.charAt(0).toUpperCase() || '?'
 }
 
-onMounted(() => {
+onMounted(async () => {
+    try {
+        const res = await axios.get('/api/session-check', { withCredentials: true })
+        if (res.data.is_logged_in) {
+            state.isLoggedIn = true
+            state.userId = res.data.user_id
+            state.userName = res.data.login_id
+        }
+    } catch (e) {
+        console.error('세션 확인 실패:', e)
+    }
     setInterval(() => {
         if (state.isLoggedIn) {
             fetchAlarms()
@@ -417,7 +474,8 @@ function openRegisterModal() {
         nickname: '',
         studentId: '',
         major: '',
-        hashtags: ['']
+        hashtags: '',
+        hashtagList: ['#']
     }
 }
 function closeRegisterModal() {
@@ -428,63 +486,212 @@ function closeRegisterModal() {
         nickname: '',
         studentId: '',
         major: '',
-        hashtags: ['']
+        hashtags: '',
+        hashtagList: ['#']
     }
+}
+function addRegisterHashtag() {
+    state.register.hashtagList = [...state.register.hashtagList, '#']
+    toast.success('해시태그 추가 완료.')
 }
 
 function checkIdAndNextStep() {
     if (!state.checkDuplicateFlag) {
-        alert("아이디 확인을 해주세요.")
+        toast.error('아이디 중복 확인을 먼저 해주세요.')
         return
     }
+
     const { id, pw } = state.register
     if (!id.trim() || !pw.trim()) {
-        alert("ID와 PW는 필수입니다.")
+        toast.error('ID와 PW는 필수입니다.')
         return
     }
 
+    toast.success('다음 단계로 이동합니다.')
     state.registerStep = 2
+
 }
 
-function checkDuplicateId() {
+async function checkDuplicateId() {
     const id = state.register.id.trim()
     if (!id) {
-        alert("ID를 입력해주세요.")
+        toast.error('ID를 입력해주세요.')
         return
     }
 
-    if (id === 'existingUser') {
-        alert("이미 존재하는 ID입니다.")
-    } else {
-        alert("사용 가능한 ID입니다.")
-        state.checkDuplicateFlag = true;
+    try {
+        const res = await axios.post(
+            '/api/check-id',
+            { login_id: id }, // ✅ 이게 body
+            {
+                headers: {
+                    'Content-Type': 'application/json' // ✅ 이건 config
+                }
+            }
+        )
+
+        if (res.data.exists) {
+            toast.error('이미 존재하는 ID입니다.')
+            state.checkDuplicateFlag = false
+        } else {
+            toast.success('사용 가능한 ID입니다.')
+            state.checkDuplicateFlag = true
+        }
+    } catch (error) {
+        console.error(error)
+        toast.error('서버 오류가 발생했습니다.')
     }
 }
 
-function submitRegister() {
-    const { nickname, studentId, major } = state.register
-    if (!nickname.trim() || !studentId.trim() || !major.trim()) {
-        alert("닉네임, 학번, 전공은 필수입니다.")
+async function submitRegister() {
+    const { id, pw: password, nickname, studentId, major, hashtagList } = state.register
+
+    if (!id.trim() || !password.trim() || !nickname.trim() || !studentId.trim() || !major.trim()) {
+        toast.error('아이디, 비밀번호, 닉네임, 학번, 전공은 필수입니다.')
         return
     }
 
-    // 💡 회원가입 처리 mock
-    console.log("회원가입 완료:", state.register)
+    // ✅ hashtagList → hashtags 변환
+    const hashtags = hashtagList
+        .map(tag => tag.trim())                         // 공백 제거
+        .map(tag => tag === '#' ? '' : tag.replace(/^#/, '').toLowerCase()) // #만 있으면 빈 문자열, 아니면 # 제거
+        .filter(tag => tag)                             // 빈 문자열 제거
+        .join(',')                                       // 콤마로 join
 
-    alert("회원가입이 완료되었습니다.")
-    state.showRegister = false
+    try {
+        const res = await axios.post('/api/register', {
+            login_id: id,
+            password,
+            name: nickname,
+            student_id: studentId,
+            major,
+            hashtags  // ✅ 변환된 문자열 전송
+        }, {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+
+        toast.success('회원가입이 완료되었습니다.')
+        console.log('서버 응답:', res.data)
+
+        state.showRegister = false
+        state.showLogin = true
+    } catch (err) {
+        console.error(err)        
+        if (err.response?.data?.error) {
+            toast.error(err.response.data.error)
+        } else {
+            toast.error('서버 오류가 발생했습니다.')
+        }
+    }
+    state.register = {
+        id: '',
+        pw: '',
+        nickname: '',
+        studentId: '',
+        major: '',
+        hashtags: '',
+        hashtagList: ['#']
+    }
+}
+
+function openResetModal() {
+  state.showLogin = false
+  state.showReset = true
+  state.reset = {
+    login_id: '',
+    student_id: '',
+    new_password: ''
+  }
+}
+
+function closeResetModal() {
+  state.showReset = false
+  state.reset = {
+    login_id: '',
+    student_id: '',
+    new_password: ''
+  }
+}
+
+async function resetPassword() {
+  const { login_id, student_id, new_password } = state.reset
+  if (!login_id.trim() || !student_id.trim() || !new_password.trim()) {
+    toast.error('모든 항목을 입력해주세요.')
+    return
+  }
+
+  try {
+    const res = await axios.post('/api/reset-password', {
+      login_id, student_id, new_password
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+
+    toast.success(res.data.message || '비밀번호가 재설정되었습니다.')
+    closeResetModal()
     state.showLogin = true
+  } catch (err) {
+    console.error(err)
+    if (err.response?.data?.error) {
+      toast.error(err.response.data.error)
+    } else {
+      toast.error('서버 오류가 발생했습니다.')
+    }
+  }
 }
 
-function login() {
-    var logid = state.id.trim()
-    var logpw = state.pw.trim()
-    if (logid != '' && logpw != '') {
-        state.userName = logid
+async function login() {
+    const login_id = state.id.trim()
+    const password = state.pw.trim()
+
+    if (!login_id || !password) {
+        toast.error('ID와 비밀번호를 모두 입력해주세요.')
+        return
+    }
+
+    try {
+        const res = await axios.post('/api/login', {
+            login_id,
+            password
+        }, {
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+
+        // 로그인 성공
+        state.userId = res.data.user_id
+        state.userName = res.data.login_id
         state.isLoggedIn = true
         state.showLogin = false
+        toast.success('로그인 완료!')
+    } catch (err) {
+        console.error(err)
+        if (err.response?.status === 401) {
+            toast.error('아이디 또는 비밀번호가 잘못되었습니다.')
+        } else {
+            toast.error('서버 오류가 발생했습니다.')
+        }
+    }
+    state.id = ''
+    state.pw = ''
+}
+
+async function logout() {
+    try {
+        await axios.post('/api/logout', {}, { withCredentials: true })
+        state.isLoggedIn = false
+        toast.success('로그아웃 되었습니다!')
+    } catch (e) {
+        console.error('로그아웃 실패:', e)
+        toast.error('로그아웃 실패')
     }
 }
+
 
 async function togglePanel(type){
     if (state.showPanel && state.panelType === type) {
@@ -496,46 +703,105 @@ async function togglePanel(type){
         
         if (type === 'alarm') {
             await fetchAlarms() // 알람만 열릴 때 호출
+        } else if (type === 'profile') {
+            await fetchMyPage()
         }
     }
 }
 
 function toggleEdit() {
-    state.originProfile = JSON.parse(JSON.stringify(state.profile))
-    state.originHashtags = [...state.hashtags]
+    state.editProfile = JSON.parse(JSON.stringify(state.profile))
     state.editMode = true
 }
 
 function cancelEdit() {
-    state.profile = JSON.parse(JSON.stringify(state.originProfile))
-    state.hashtags = [...state.originHashtags]
-
-    state.originProfile = {
+    state.editProfile = {
         nickname: '',
         studentId: '',
-        major: ''
+        major: '',
+        hashtagList: ['#']
     }
-    state.originHashtags = []
     state.editMode = false
 }
 
-function saveEdit() {
-    // 실제 저장 로직은 여기에 추가 (예: API 호출)
-    state.editMode = false
+async function saveEdit() {
+    try {
+        // 해시태그 정규화: '#' 제거, 소문자 변환, 공백 제거
+        const hashtags = state.editProfile.hashtagList
+            .map(tag => tag.trim().replace(/^#/, '').toLowerCase())
+            .filter(Boolean)
+            .join(',')
+
+        const payload = {
+            name: state.editProfile.nickname,
+            major: state.editProfile.major,
+            student_id: state.editProfile.studentId,
+            hashtags
+        }
+
+        await axios.put(`/api/mypage/${state.userId}`, payload, {
+            headers: { 'Content-Type': 'application/json' },
+            withCredentials: true
+        })
+        state.profile = JSON.parse(JSON.stringify(state.editProfile))
+        state.editMode = false
+        toast.success('내 정보가 수정되었습니다.')
+    } catch (err) {
+        console.error('내정보 수정 실패:', err)
+        toast.error('내 정보를 저장하는 데 실패했습니다.')
+    }
 }
+
 function addHashtag() {
-    state.hashtags.push('#')
+    state.editProfile.hashtagList = [...state.editProfile.hashtagList, '#']
+    toast.success('해시태그 추가 완료.')
 }
 
 async function fetchAlarms() {
+    if (!state.userId) return
+
     try {
-        const res = await fetch('/api/alarms')  // 예시
+        const res = await fetch(`/api/notifications/${state.userId}`, {
+            credentials: 'include'
+        })
+
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
+
         const data = await res.json()
-        state.alarms = data
+
+        state.alarms = data.map(alarm => ({
+            id: alarm.notification_id,
+            message: alarm.message,
+            is_read: alarm.is_read,
+            time: formatKoreanTime(alarm.created_at)
+        }))
     } catch (e) {
         console.error('알람 불러오기 실패:', e)
     }
 }
+
+async function fetchMyPage() {
+    try {
+        const res = await axios.get(`/api/mypage/${state.userId}`, { withCredentials: true })
+        const data = res.data
+
+        state.profile.nickname = data.name || '슝슝이25'
+        state.profile.studentId = data.student_id || '20252025'
+        state.profile.major = data.major || 'AI융합학과'
+        state.profile.hashtagList = (data.hashtags || '')
+            .split(',')
+            .filter(Boolean)
+            .map(tag => `#${tag.trim()}`)
+
+        if (state.profile.hashtagList.length === 0) {
+            state.profile.hashtagList = ['#']
+        }
+    } catch (e) {
+        console.error('마이페이지 불러오기 실패:', e)
+        toast.error('마이페이지 정보를 불러올 수 없습니다.')
+    }
+}
+
 
 function closePanel() {
     state.showPanel = false
@@ -582,6 +848,15 @@ function formatTime(date) {
     const period = hours >= 12 ? '오후' : '오전'
     hours = hours % 12 || 12
     return `${period} ${hours}:${minutes}`
+}
+
+function formatKoreanTime(isoString) {
+    const d = new Date(isoString)
+    const hour = d.getHours()
+    const minutes = d.getMinutes().toString().padStart(2, '0')
+    const period = hour < 12 ? '오전' : '오후'
+    const formattedHour = hour % 12 || 12
+    return `${period} ${formattedHour}:${minutes}`
 }
 
 </script>
@@ -732,12 +1007,13 @@ function formatTime(date) {
     .edit-buttons {
         display: flex;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 12px;
         margin-top: 24px;
     }
 
     .edit-buttons button {
         padding: 6px 12px;
+        margin-left: 12px;
         border: none;
         border-radius: 4px;
         font-weight: bold;
@@ -1147,6 +1423,35 @@ function formatTime(date) {
         background-color: #369f6b;
     }
 
+    .alarm-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .alarm-item {
+        padding: 10px 12px;
+        border-radius: 8px;
+        background-color: #f8f8f8;
+        border-left: 4px solid #42b983;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+    }
+
+    .alarm-item.unread {
+        font-weight: bold;
+        background-color: #e8f9f2;
+    }
+
+    .alarm-message {
+        font-size: 14px;
+        color: #333;
+    }
+
+    .alarm-time {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #888;
+    }
 
 
 

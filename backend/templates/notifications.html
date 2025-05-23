@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>알림</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    .notification {
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+    }
+    .notification a {
+      text-decoration: none;
+      color: #333;
+      font-weight: bold;
+    }
+    button {
+      margin: 5px 5px 0 0;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      border: none;
+      background-color: #f0f0f0;
+    }
+    button:hover {
+      opacity: 0.85;
+    }
+  </style>
+</head>
+<body>
+  <h1>📬 알림 목록</h1>
+  <div id="notification-list">로딩 중...</div>
+
+  <script>
+    const userId = "{{ session['user_id'] }}";
+
+    function loadNotifications() {
+      fetch(`/notifications/${userId}`)
+        .then(res => res.json())
+        .then(data => {
+          const container = document.getElementById('notification-list');
+          container.innerHTML = '';
+
+          if (!Array.isArray(data)) {
+            container.innerHTML = '<p>' + (data.message || '알림이 없습니다.') + '</p>';
+            return;
+          }
+
+          data.forEach(noti => {
+            const div = document.createElement('div');
+            div.className = 'notification';
+
+            const isApplication = noti.study_member_id !== null;
+            let messageHtml = '';
+            let actionButtons = `
+              <button onclick="markAsRead(${noti.notification_id})">📖 읽음</button>
+              <button onclick="deleteNotification(${noti.notification_id})">🗑️ 삭제</button>
+            `;
+
+            if (isApplication) {
+              // 스터디 신청 알림
+              messageHtml = `<p><strong>${noti.message}</strong></p>`;
+              actionButtons += `
+                <button onclick="handleDecision(${noti.study_member_id}, 'approve', ${noti.notification_id})">✅ 승인</button>
+                <button onclick="handleDecision(${noti.study_member_id}, 'reject', ${noti.notification_id})">❌ 거절</button>
+              `;
+            } else if (noti.study_id !== null) {
+              // 관심 해시태그 기반 스터디 알림 등
+              messageHtml = `<a href="/notifications/${noti.notification_id}/study">${noti.message}</a>`;
+            } else {
+              // 일반 알림 메시지
+              messageHtml = `<p>${noti.message}</p>`;
+            }
+
+            div.innerHTML = `
+              ${messageHtml}
+              <div>${actionButtons}</div>
+            `;
+            container.appendChild(div);
+          });
+        });
+    }
+
+    function markAsRead(id) {
+      fetch(`/notifications/read/${id}`, { method: 'PUT' })
+        .then(() => loadNotifications());
+    }
+
+    function deleteNotification(id) {
+      fetch(`/notifications/${id}`, { method: 'DELETE' })
+        .then(() => loadNotifications());
+    }
+
+    function handleDecision(studyMemberId, decision, notificationId) {
+      fetch(`/study/application/${studyMemberId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ decision: decision })
+      })
+      .then(res => res.json())
+      .then(data => {
+        alert(data.message || '처리 완료');
+        markAsRead(notificationId);  // ✅ 승인/거절 시 자동 읽음 처리
+        loadNotifications();
+      })
+      .catch(err => {
+        alert('처리 중 오류 발생');
+        console.error(err);
+      });
+    }
+
+    loadNotifications();
+  </script>
+</body>
+</html>

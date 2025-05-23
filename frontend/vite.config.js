@@ -3,7 +3,6 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 export default defineConfig({
-  root: '.',
   plugins: [vue()],
   resolve: {
     alias: {
@@ -13,11 +12,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
-    strictPort: true
-  },
-  build: {
-    rollupOptions: {
-      input: './index.html' // 또는 ./index.html 경로 확인
+    strictPort: true,
+    proxy: {
+      '/api': 'http://localhost:5000'
     }
   }
 })

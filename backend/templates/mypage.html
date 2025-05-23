@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>마이페이지</title>
+  <style>
+    .hashtag-item {
+      display: inline-block;
+      margin: 4px;
+      padding: 4px 8px;
+      background-color: #f0f0f0;
+      border-radius: 4px;
+    }
+    .hashtag-item input {
+      width: 100px;
+    }
+    .hashtag-item button {
+      margin-left: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h2>👤 내 정보</h2>
+  <button onclick="logout()" style="float:right;">로그아웃</button>
+
+  <div id="user-info" style="display:none;">
+    <label>이름: <input id="name" /></label><br />
+    <label>학과: <input id="major" /></label><br />
+    <label>학번: <input id="student_id" /></label><br />
+    <label>해시태그: 
+      <input id="new-hashtag" placeholder="#AI 등">
+      <button onclick="addHashtag()">추가</button>
+    </label><br />
+    <div id="hashtag-container"></div>
+    <button onclick="updateUserInfo()">정보 수정하기</button>
+  </div>
+
+  <hr />
+
+  <div>
+    <h3>✅ 참여 중인 스터디</h3>
+    <ul id="joined-studies"></ul>
+  </div>
+
+  <div>
+    <h3>🛠 내가 생성한 스터디</h3>
+    <ul id="created-studies"></ul>
+  </div>
+
+  <div>
+    <h3>💡 관심 해시태그 기반 추천 스터디</h3>
+    <ul id="interested-studies"></ul>
+  </div>
+
+  <script>
+    let userId = sessionStorage.getItem("user_id");
+    let hashtagList = [];
+
+    window.onload = () => {
+      if (!userId) {
+        alert("로그인이 필요합니다.");
+        window.location.href = "/";
+        return;
+      }
+      loadUserInfo();
+    };
+
+    async function loadUserInfo() {
+      try {
+        const res = await fetch(`/api/mypage/${userId}`);
+        if (!res.ok) throw new Error("사용자 정보 조회 실패");
+        const data = await res.json();
+
+        document.getElementById('user-info').style.display = 'block';
+        document.getElementById('name').value = data.name;
+        document.getElementById('major').value = data.major;
+        document.getElementById('student_id').value = data.student_id;
+
+        hashtagList = (data.hashtags || "").split(',').map(tag => tag.trim()).filter(tag => tag);
+        renderHashtags();
+
+        const joinedRes = await fetch(`/api/mypage/${userId}/joined-studies`);
+        const joined = await joinedRes.json();
+        document.getElementById('joined-studies').innerHTML =
+          joined.length === 0 ? '<li>없음</li>' : joined.map(s =>
+            `<li><strong>${s.title}</strong>: ${s.description}</li>`).join('');
+
+        const createdRes = await fetch(`/api/mypage/${userId}/created-studies`);
+        const created = await createdRes.json();
+        document.getElementById('created-studies').innerHTML =
+          created.length === 0 ? '<li>없음</li>' : created.map(s =>
+            `<li><strong>${s.title}</strong>: ${s.description} [${s.hashtags}]</li>`).join('');
+
+        const interestRes = await fetch(`/api/mypage/${userId}/interested-studies`);
+        const interest = await interestRes.json();
+        document.getElementById('interested-studies').innerHTML =
+          interest.length === 0 ? '<li>없음</li>' : interest.map(s =>
+            `<li><strong>${s.title}</strong>: ${s.description} [${s.hashtags}]</li>`).join('');
+      } catch (err) {
+        alert(err.message || "정보 로딩 중 오류 발생");
+      }
+    }
+
+    function renderHashtags() {
+      const container = document.getElementById('hashtag-container');
+      container.innerHTML = '';
+      hashtagList.forEach((tag, idx) => {
+        const div = document.createElement('div');
+        div.className = 'hashtag-item';
+        div.innerHTML = `
+          <input value="${tag}" onchange="editHashtag(${idx}, this.value)">
+          <button onclick="removeHashtag(${idx})">❌</button>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function addHashtag() {
+      const newTag = document.getElementById('new-hashtag').value.trim();
+      if (!newTag) return;
+      if (hashtagList.includes(newTag)) {
+        alert("이미 추가된 해시태그입니다.");
+        return;
+      }
+      hashtagList.push(newTag);
+      document.getElementById('new-hashtag').value = '';
+      renderHashtags();
+    }
+
+    function removeHashtag(index) {
+      hashtagList.splice(index, 1);
+      renderHashtags();
+    }
+
+    function editHashtag(index, newValue) {
+      hashtagList[index] = newValue.trim();
+    }
+
+    async function updateUserInfo() {
+      const payload = {
+        name: document.getElementById('name').value,
+        major: document.getElementById('major').value,
+        student_id: document.getElementById('student_id').value,
+        hashtags: hashtagList.join(',')
+      };
+
+      const res = await fetch(`/api/mypage/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await res.json();
+      alert(result.message || result.error || "수정 실패");
+    }
+
+    async function logout() {
+      sessionStorage.clear();
+      await fetch('/logout');
+      window.location.href = '/';
+    }
+  </script>
+</body>
+</html>

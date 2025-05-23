@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import ListPage from '@/pages/study/ListPage.vue'
+import ListPage from '../pages/study/ListPage.vue'
 
 const routes = [
   { path: '/', redirect: '/study/list' },

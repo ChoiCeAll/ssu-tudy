@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Edit Study</title>
+</head>
+<body>
+    <h2>Edit Study</h2>
+    <form method="POST">
+        <label for="title">Title:</label>
+        <input type="text" name="title" value="{{ study[0] }}" required><br>
+
+        <label for="description">Description:</label>
+        <textarea name="description" required>{{ study[1] }}</textarea><br>
+
+        <label for="hashtags">Hashtags:</label>
+        <input type="text" name="hashtags" value="{{ study[2] }}" placeholder="#example #study"><br>
+
+        <!-- <label for="open_kakao_link">Open Kakao Link:</label>
+        <input type="text" name="open_kakao_link" value="{{ study[3] }}" required><br> -->
+
+        <label for="max_members">Max Members:</label>
+        <input type="number" name="max_members" value="{{ study[4] }}" min="1" required><br>
+
+        <button type="submit">Update</button>
+    </form>
+    <p><a href="{{ url_for('study_detail', study_id=study_id) }}">Back to Detail</a></p>
+</body>
+</html>
+
+
