@@ -2,19 +2,20 @@
   <div class="detail-page">
     <h1>📌 스터디 상세보기</h1>
 
-    <div class="detail-box">
+    <div class="detail-box" v-if="study">
+      <img :src="study.image" class="detail-img" />
       <p><strong>스터디명:</strong> {{ study.name }}</p>
-      <p><strong>설명:</strong> {{ study.description }}</p>
-      <p><strong>리더 ID:</strong> {{ study.leaderId }}</p>
+      <p><strong>해시태그:</strong> {{ formattedHashtags }}</p>
+      <p><strong>리더 ID:</strong> {{ study.leaderLoginId }}</p>
       <p><strong>모집 인원:</strong> {{ study.members }} / {{ study.capacity }}</p>
       <p><strong>시간:</strong> {{ study.time }}</p>
     </div>
 
     <div class="back-button">
-      <button class="list-btn" @click="goToList">← 목록</button>
+      <button class="list-btn" @click="goToList">목록으로</button>
     </div>
 
-    <div class="action-buttons">
+    <div class="action-buttons" v-if="isAuthor">
       <button class="edit-btn" @click="goToEdit">✏️ 수정</button>
       <button class="delete-btn" @click="deletePost">🗑️ 삭제</button>
     </div>
@@ -32,84 +33,116 @@
 
     <h2>💬 댓글</h2>
 
-    <!-- 댓글 입력 -->
     <input v-model="newComment" placeholder="댓글을 입력하세요" @keyup.enter="addComment" />
     <button @click="addComment">댓글 작성</button>
-    </div>
 
-    <!-- 댓글 목록 -->
     <ul class="comment-list">
       <template v-for="comment in topLevelComments" :key="comment.id">
         <li class="comment-item">
           <div class="comment-header">
             <span class="author">{{ comment.author }}</span>
-            <span class="timestamp">{{ formatDate(comment.timestamp) }}</span>
+            <span class="timestamp">{{ formatDate(comment.created_at) }}</span>
           </div>
-          <div class="comment-content">{{ comment.content }}</div>
+          <div class="comment-content">
+            <input v-if="editId === comment.id" v-model="editText" />
+            <span v-else>{{ comment.content }}</span>
+          </div>
           <div class="comment-actions">
             <button @click="comment.showReply = !comment.showReply">답글</button>
-            <button class="delete-btn" @click="deleteComment(comment.id)">삭제</button>
+            <template v-if="comment.author_id === sessionUserId">
+              <button @click="startEdit(comment)">수정</button>
+              <button v-if="editId === comment.id" @click="submitEdit(comment.id)">수정 완료</button>
+              <button @click="confirmDelete(comment.id)">삭제</button>
+            </template>
           </div>
           <div v-if="comment.showReply" class="reply-input">
             <input v-model="replyText[comment.id]" placeholder="답글을 입력하세요" />
             <button @click="submitReply(comment.id)">등록</button>
           </div>
 
-          <!-- 대댓글 목록 -->
           <ul class="reply-list">
-            <li v-for="reply in repliesFor(comment.id)" :key="reply.id" class="reply-item">
-              <div class="comment-header">
-                <span class="author">{{ reply.author }}</span>
-                <span class="timestamp">{{ formatDate(reply.timestamp) }}</span>
-              </div>
-              <div class="comment-content">{{ reply.content }}</div>
-              <div class="comment-actions">
-                <button class="delete-btn" @click="deleteComment(reply.id)">삭제</button>
+            <li v-for="reply in repliesFor(comment.id)" :key="reply.id" class="reply-wrapper">
+              <div class="reply-thread">ㄴ</div>
+              <div class="reply-item">
+                <div class="comment-header">
+                  <span class="author">{{ reply.author }}</span>
+                  <span class="timestamp">{{ formatDate(reply.created_at) }}</span>
+                </div>
+                <div class="comment-content">
+                  <input v-if="editId === reply.id" v-model="editText" />
+                  <span v-else>{{ reply.content }}</span>
+                </div>
+                <div class="comment-actions" v-if="reply.author_id === sessionUserId">
+                  <button @click="startEdit(reply)">수정</button>
+                  <button v-if="editId === reply.id" @click="submitEdit(reply.id)">수정 완료</button>
+                  <button @click="confirmDelete(reply.id)">삭제</button>
+                </div>
               </div>
             </li>
           </ul>
         </li>
       </template>
     </ul>
-
-    
+  </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
+import { useToast } from 'vue-toastification'
 
+const toast = useToast()
 const router = useRouter()
 const route = useRoute()
-const studyId = route.params.id
 
+const sessionUserId = ref(null)
 const study = ref(null)
 const comments = ref([])
 const newComment = ref('')
 const replyText = ref({})
 const isFavorite = ref(false)
-const currentUser = 'me123' // 로그인 시스템과 연결 필요
+const editId = ref(null)
+const editText = ref('')
+const defaultImage = '../../../images/default_study.png'
 
-onMounted(async () => {
+const isAuthor = computed(() => study.value && study.value.leaderId === sessionUserId.value)
+const formattedHashtags = computed(() =>
+  study.value?.hashtags ? '#' + study.value.hashtags.split(',').join(' #') : ''
+)
+
+async function fetchStudyDetail(id) {
   try {
-    // ✅ 스터디 정보 불러오기
-    const studyRes = await axios.get(`/api/studies/${studyId}`)
-    study.value = studyRes.data
+    const session = await axios.get('/api/session-check')
+    if (session.data.is_logged_in) sessionUserId.value = session.data.user_id
 
-    // ✅ 댓글 목록 불러오기
-    const commentRes = await axios.get(`/api/comments?study_id=${studyId}`)
+    const res = await axios.get(`/api/studies/${id}`)
+    const data = res.data
+
+    data.image = (!data.image || data.image.trim() === '') ? defaultImage : data.image
+    study.value = data
+    isFavorite.value = data.is_favorited
+
+    const commentRes = await axios.get(`/api/comments?study_id=${id}`)
     comments.value = commentRes.data.map(c => ({ ...c, showReply: false }))
   } catch (err) {
-    console.error('데이터 로드 실패:', err)
+    console.error('상세 정보 로드 실패:', err)
   }
+}
+
+onMounted(() => {
+  fetchStudyDetail(route.params.id)
+})
+
+watch(() => route.params.id, (newId) => {
+  fetchStudyDetail(newId)
 })
 
 function addComment() {
   const content = newComment.value.trim()
   if (!content) return
   axios.post('/api/comments', {
-    study_id: studyId,
+    study_id: route.params.id,
     content,
     parent_id: null
   }).then(res => {
@@ -122,7 +155,7 @@ function submitReply(parentId) {
   const content = replyText.value[parentId]?.trim()
   if (!content) return
   axios.post('/api/comments', {
-    study_id: studyId,
+    study_id: route.params.id,
     content,
     parent_id: parentId
   }).then(res => {
@@ -131,9 +164,30 @@ function submitReply(parentId) {
   })
 }
 
+function confirmDelete(commentId) {
+  if (confirm('댓글을 삭제하시겠습니까?')) {
+    deleteComment(commentId)
+  }
+}
+
 function deleteComment(commentId) {
-  axios.delete(`/api/comments/${commentId}`).then(() => {
-    comments.value = comments.value.filter(c => c.id !== commentId && c.parent_id !== commentId)
+  comments.value = comments.value.filter(c => c.id !== commentId && c.parent_id !== commentId)
+  axios.delete(`/api/comments/${commentId}`)
+}
+
+function startEdit(comment) {
+  editId.value = comment.id
+  editText.value = comment.content
+}
+
+function submitEdit(commentId) {
+  const content = editText.value.trim()
+  if (!content) return
+  axios.put(`/api/comments/${commentId}`, { content }).then(() => {
+    const comment = comments.value.find(c => c.id === commentId)
+    if (comment) comment.content = content
+    editId.value = null
+    editText.value = ''
   })
 }
 
@@ -149,34 +203,73 @@ function repliesFor(parentId) {
   return comments.value.filter(c => c.parent_id === parentId)
 }
 
-function goToList() { router.push('/study/list') }
-function goToEdit() { router.push(`/study/${studyId}/edit`) }
+function goToList() {
+  router.push('/study/list')
+}
+
+function goToEdit() {
+  router.push(`/study/${route.params.id}/edit`)
+}
+
 function deletePost() {
   if (confirm('정말 삭제하시겠습니까?')) {
-    axios.delete(`/api/studies/${studyId}`).then(() => {
-      alert('삭제 완료')
-      router.push('/study/list')
-    })
+    axios.delete(`/api/studies/${route.params.id}`)
+      .then(() => {
+        toast.success('삭제 완료')
+        router.push('/study/list')
+      })
+      .catch(() => {
+        toast.error('삭제 중 오류가 발생했습니다')
+      })
   }
 }
-function toggleFavorite() { isFavorite.value = !isFavorite.value }
-function requestJoin() { alert('가입 요청이 전송되었습니다!') }
-</script>
 
+function toggleFavorite() {
+  const url = isFavorite.value
+    ? `/api/study/${route.params.id}/unfavorite`
+    : `/api/study/${route.params.id}/favorite`
+
+  axios.post(url)
+    .then(res => {
+      toast.success(res.data.message)
+      isFavorite.value = !isFavorite.value
+    })
+    .catch(err => {
+      const msg = err.response?.data?.error || '요청 실패'
+      toast.error(`⚠ ${msg}`)
+    })
+}
+
+function requestJoin() {
+  axios.post(`/api/study/${route.params.id}/apply`)
+    .then(res => {
+      toast.success(res.data.message || '스터디 신청 완료')
+    })
+    .catch(err => {
+      const msg = err.response?.data?.error || '신청 실패'
+      toast.error(`⚠ ${msg}`)
+    })
+}
+</script>
 
 <style scoped>
 .detail-page {
   padding: 20px;
 }
-
+.detail-img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
 .detail-box {
   border: 1px solid #ccc;
   padding: 16px;
   border-radius: 8px;
   margin-bottom: 20px;
 }
-
 .join-btn {
+  margin-bottom: 24px;
   padding: 10px 16px;
   background-color: #42b983;
   color: white;
@@ -184,13 +277,10 @@ function requestJoin() { alert('가입 요청이 전송되었습니다!') }
   border-radius: 4px;
   font-weight: bold;
   cursor: pointer;
-  margin-bottom: 24px;
 }
-
 .join-btn:hover {
   background-color: #369f6b;
 }
-
 .favorite-box {
   margin-bottom: 16px;
   display: flex;
@@ -210,91 +300,16 @@ function requestJoin() { alert('가입 요청이 전송되었습니다!') }
   font-size: 16px;
   color: #666;
 }
-
 .back-button {
   margin-bottom: 16px;
 }
 .list-btn {
   background-color: #f0f0f0;
   color: #333;
-  border: none;
   padding: 8px 16px;
-  font-weight: bold;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-.list-btn:hover {
-  background-color: #ddd;
-}
-
-.action-buttons {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin: 8px 0 24px;
-}
-.edit-btn,
-.delete-btn {
-  padding: 8px 16px;
-  font-size: 14px;
-  border: none;
   border-radius: 4px;
   font-weight: bold;
+  border: none;
   cursor: pointer;
-}
-.edit-btn {
-  background-color: #42b983;
-  color: white;
-}
-.edit-btn:hover {
-  background-color: #369f6b;
-}
-.delete-btn {
-  background-color: #ff5e5e;
-  color: white;
-}
-.delete-btn:hover {
-  background-color: #d63030;
-}
-
-/* 💬 댓글 스타일 */
-.comment-list {
-  list-style: none;
-  padding: 0;
-  margin-bottom: 20px;
-}
-.comment-item, .reply-item {
-  background-color: #f9f9f9;
-  border-radius: 6px;
-  padding: 10px;
-  margin-bottom: 10px;
-}
-.reply-item {
-  margin-left: 24px;
-  background-color: #f0f0f0;
-}
-.comment-header {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #888;
-  margin-bottom: 4px;
-}
-.comment-content {
-  font-size: 14px;
-  margin-bottom: 6px;
-}
-.comment-actions {
-  display: flex;
-  gap: 8px;
-}
-.reply-input {
-  margin-top: 6px;
-}
-.reply-input input {
-  width: 80%;
-  padding: 6px;
-  margin-right: 6px;
 }
 </style>

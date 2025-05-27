@@ -3,8 +3,11 @@ from flask_mysqldb import MySQL
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from werkzeug.security import generate_password_hash, check_password_hash
 import time
+import traceback
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="http://localhost:5173", manage_session=False)
+
 app.secret_key = 'your_secret_key'
 
 # MySQL 설정
@@ -17,24 +20,6 @@ app.config['MYSQL_DB'] = 'study'
 app.config['MYSQL_CURSORCLASS'] = 'DictCursor'
 
 mysql = MySQL(app)
-socketio = SocketIO(app)
-
-# HTML 라우트
-@app.route('/')
-def login_page():
-    return render_template('login.html')
-
-@app.route('/register')
-def show_register_form():
-    return render_template('register.html')
-
-@app.route('/mypage')
-def show_mypage():
-    return render_template('mypage.html')
-
-@app.route('/notifications')
-def show_notifications():
-    return render_template('notifications.html')
 
 
 # 아이디 중복 확인
@@ -310,304 +295,394 @@ def update_mypage(user_id):
         return jsonify({'error': '내정보 수정 실패', 'detail': str(e)}), 500
 
 
-
-# 스터디 목록 조회
-@app.route('/studies')
-def study_list():
+#스터디 목록 조회
+@app.route('/api/studies', methods=['GET'])
+def api_study_list():
     if 'user_id' not in session:
-        return redirect(url_for('login_page'))
+        return jsonify({'error': '로그인 필요'}), 401
 
-    user_id = session['user_id']
     keyword = request.args.get('keyword', '').strip()
-    hashtag = request.args.get('hashtag', '').strip()
-    sort = request.args.get('sort', 'recent')
-
-    def build_query(leader_condition):
-        where_clauses = ["is_active = TRUE"]
-        params = []
-
-        if leader_condition == 'mine':
-            where_clauses.append("leader_id = %s")
-            params.append(user_id)
-        else:
-            where_clauses.append("leader_id != %s")
-            params.append(user_id)
-
-        if keyword:
-            where_clauses.append("(title LIKE %s OR description LIKE %s)")
-            params.extend([f"%{keyword}%", f"%{keyword}%"])
-
-        if hashtag:
-            where_clauses.append("hashtags LIKE %s")
-            params.append(f"%{hashtag}%")
-
-        where_sql = " AND ".join(where_clauses)
-
-        order_sql = "created_at DESC" if sort == "recent" else "title ASC"
-        query = f"SELECT study_id, title, description FROM Study WHERE {where_sql} ORDER BY {order_sql}"
-        return query, params
-
     cur = mysql.connection.cursor()
-    my_query, my_params = build_query('mine')
-    cur.execute(my_query, my_params)
-    my_studies = cur.fetchall()
 
-    other_query, other_params = build_query('others')
-    cur.execute(other_query, other_params)
-    other_studies = cur.fetchall()
+    query = """
+        SELECT s.study_id AS id, s.title AS name, s.hashtags,
+               u.login_id AS leaderId, s.max_members AS capacity,
+               s.time, s.image_base64
+        FROM Study s
+        JOIN User u ON s.leader_id = u.user_id
+        WHERE s.is_active = TRUE
+    """
+    params = []
+
+    if keyword:
+        query += " AND (s.title LIKE %s OR s.hashtags LIKE %s)"
+        search_term = f"%{keyword}%"
+        params.extend([search_term, search_term])
+
+    query += " ORDER BY s.created_at DESC"
+    cur.execute(query, params)
+    studies = cur.fetchall()
+
+    for study in studies:
+        study['description'] = '#' + study['hashtags'].replace(',', ' #') if study.get('hashtags') else ''
+        study['members'] = 0
+
+        # image_base64가 있으면 image로 설정, 없으면 None
+        if study.get('image_base64'):
+            study['image'] = study['image_base64']
+        else:
+            study['image'] = None
+
     cur.close()
+    return jsonify(studies)
 
-    return render_template('study_list.html',
-                           my_studies=my_studies,
-                           other_studies=other_studies,
-                           keyword=keyword,
-                           hashtag=hashtag,
-                           sort=sort)
 
 
 
 # 스터디 상세보기
-@app.route('/studies/<int:study_id>')
-def study_detail(study_id):
+@app.route('/api/studies/<int:study_id>', methods=['GET'])
+def api_study_detail(study_id):
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
     user_id = session['user_id']
     cur = mysql.connection.cursor()
 
-    # 스터디 정보 조회
-    cur.execute("SELECT * FROM Study WHERE study_id = %s", (study_id,))
-    study = cur.fetchone()
-
-    # 댓글 목록 조회
     cur.execute("""
-        SELECT c.content, u.login_id, c.created_at, c.author_id, c.comment_id 
-        FROM Comment c 
-        JOIN User u ON c.author_id = u.user_id 
-        WHERE c.study_id = %s AND c.is_active = TRUE
-    """, (study_id,))
-    comments = cur.fetchall()
+        SELECT s.study_id AS id, s.title AS name, s.description,
+               s.leader_id AS leaderId, u.login_id AS leaderLoginId,
+               s.max_members AS capacity, s.time, s.hashtags, s.image_base64 AS image
+        FROM Study s
+        JOIN User u ON s.leader_id = u.user_id
+        WHERE s.study_id = %s AND s.is_active = TRUE
+    """, [study_id])
 
-    # 현재 사용자가 이미 신청한 스터디인지 확인
+    study = cur.fetchone()
+    if not study:
+        cur.close()
+        return jsonify({'error': '스터디 없음'}), 404
+
+    # 참여 여부
     cur.execute("SELECT * FROM StudyMember WHERE study_id = %s AND user_id = %s", (study_id, user_id))
-    is_applied = cur.fetchone() is not None
+    study['is_applied'] = cur.fetchone() is not None
+
+    study['members'] = 0
+    if not study.get('image'):
+        study['image'] = ''
+
+    # 관심 등록 여부 확인 
+    cur.execute("SELECT * FROM StudyMember WHERE study_id = %s AND user_id = %s AND is_approved IS NULL", (study_id, user_id))
+    study['is_favorited'] = cur.fetchone() is not None
 
     cur.close()
+    return jsonify(study)
 
-    is_author = (study['leader_id'] == user_id)
+# 관심 스터디 등록
+@app.route('/api/study/<int:study_id>/favorite', methods=['POST'])
+def mark_interest_study(study_id):
+    if 'user_id' not in session:
+        return jsonify({'error': '로그인이 필요합니다.'}), 401
 
-    return render_template(
-        'study_detail.html',
-        study=study,
-        study_id=study_id,
-        is_author=is_author,
-        is_applied=is_applied,
-        comments=comments
-    )
+    user_id = session['user_id']
+    cur = mysql.connection.cursor()
+
+    try:
+        cur.execute("""
+            SELECT * FROM StudyMember 
+            WHERE study_id = %s AND user_id = %s
+        """, (study_id, user_id))
+        existing = cur.fetchone()
+
+        if not existing:
+            cur.execute("""
+                INSERT INTO StudyMember (study_id, user_id, is_approved)
+                VALUES (%s, %s, NULL)
+            """, (study_id, user_id))
+            mysql.connection.commit()
+
+        return jsonify({'message': '관심 스터디로 등록되었습니다.'}), 200
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({'error': '관심 등록 실패', 'detail': str(e)}), 500
+    finally:
+        cur.close()
+
+
+# 관심 스터디 해제
+@app.route('/api/study/<int:study_id>/unfavorite', methods=['POST'])
+def unmark_interest_study(study_id):
+    if 'user_id' not in session:
+        return jsonify({'error': '로그인이 필요합니다.'}), 401
+
+    user_id = session['user_id']
+    cur = mysql.connection.cursor()
+
+    try:
+        cur.execute("""
+            DELETE FROM StudyMember
+            WHERE study_id = %s AND user_id = %s AND is_approved IS NULL
+        """, (study_id, user_id))
+        mysql.connection.commit()
+        return jsonify({'message': '관심 스터디에서 해제되었습니다.'}), 200
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({'error': '관심 해제 실패', 'detail': str(e)}), 500
+    finally:
+        cur.close()
+
+
+#마이페이지에서 관심 등록 스터디 목록
+@app.route('/api/mypage/<int:user_id>/favorited-studies')
+def get_favorited_studies(user_id):
+    if 'user_id' not in session or session['user_id'] != user_id:
+        return abort(403)
+
+    cur = mysql.connection.cursor()
+    cur.execute("""
+        SELECT s.study_id, s.title, s.description, s.hashtags
+        FROM StudyMember sm
+        JOIN Study s ON sm.study_id = s.study_id
+        WHERE sm.user_id = %s AND sm.is_approved IS NULL AND s.is_active = TRUE
+    """, (user_id,))
+    favorites = cur.fetchall()
+    cur.close()
+
+    return jsonify(favorites)
 
 # 스터디 생성
-
-@app.route('/studies/create', methods=['GET', 'POST'])
-def study_create():
+@app.route('/api/studies', methods=['POST'])
+def api_study_create():
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
-    if request.method == 'POST':
-        title = request.form['title']
-        description = request.form['description']
-        raw_tags = request.form['hashtags']
-        open_kakao_link = request.form.get('open_kakao_link', '')
-        max_members = request.form['max_members']
+    try:
+        data = request.get_json()
+        title = data.get('name')
+        description = data.get('description')
+        raw_tags = data.get('hashtags', '')
+        max_members = data.get('capacity')
+        time = data.get('time', '')
+        image_base64 = data.get('image', '')
         leader_id = session['user_id']
 
-        # 해시태그 정규화 처리 (공백 제거, '#' 제거, 소문자 변환)
         tags = [tag.strip().lstrip('#').lower() for tag in raw_tags.split(',') if tag.strip()]
         normalized_hashtags = ','.join(tags)
 
         cur = mysql.connection.cursor()
-        try:
-            # 스터디 정보 저장
-            cur.execute("""
-                INSERT INTO Study (title, description, leader_id, hashtags, open_kakao_link, max_members, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
-            """, (title, description, leader_id, normalized_hashtags, open_kakao_link, max_members))
-            study_id = cur.lastrowid
+        cur.execute("""
+            INSERT INTO Study (title, description, leader_id, hashtags, max_members, created_at, is_active, time, image_base64)
+            VALUES (%s, %s, %s, %s, %s, NOW(), TRUE, %s, %s)
+        """, (title, description, leader_id, normalized_hashtags, max_members, time, image_base64))
+        study_id = cur.lastrowid
 
-            # 관심 해시태그 기반 알림 전송
-            if tags:
-                conditions = " OR ".join(["m.hashtags LIKE %s" for _ in tags])
-                params = [f"%{tag}%" for tag in tags]
+        # ✅ 수정된 부분
+        cur.execute("""
+            INSERT INTO UserRoomStatus (user_id, study_id, in_room, first_messageSequence)
+            VALUES (%s, %s, %s, %s)
+        """, (leader_id, study_id, 1, 0))
 
-                cur.execute(f"""
-                    SELECT u.user_id
-                    FROM MyPage m
-                    JOIN User u ON m.user_id = u.user_id
-                    WHERE ({conditions}) AND u.user_id != %s
-                """, params + [leader_id])
+        mysql.connection.commit()
+        cur.close()
 
-                matched_users = cur.fetchall()
-                for user in matched_users:
-                    msg = f"[{title}] 관심 해시태그와 일치하는 새 스터디가 등록되었습니다!"
-                    cur.execute("""
-                        INSERT INTO Notification (user_id, message, study_id, is_read, created_at)
-                        VALUES (%s, %s, %s, FALSE, NOW())
-                    """, (user['user_id'], msg, study_id))
+        return jsonify({'message': '스터디 등록 완료', 'id': study_id}), 201
 
-            mysql.connection.commit()
-            flash('스터디 생성 완료')
-            return redirect(url_for('study_list'))
+    except Exception as e:
+        traceback.print_exc()  # 전체 에러 스택 트레이스 출력
+        return jsonify({'error': '스터디 등록 실패', 'detail': str(e)}), 500
+    except Exception as e:
+        return jsonify({'error': '스터디 등록 실패', 'detail': str(e)}), 500
 
-        except Exception as e:
-            mysql.connection.rollback()
-            flash(f'스터디 생성 실패: {str(e)}')
 
-        finally:
-            cur.close()
-
-    return render_template('study_create.html')
 
 
 # 스터디 수정
-@app.route('/studies/<int:study_id>/edit', methods=['GET', 'POST'])
-def study_edit(study_id):
+@app.route('/api/studies/<int:study_id>', methods=['PUT'])
+def api_study_edit(study_id):
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
-    cur = mysql.connection.cursor()
-    cur.execute("SELECT * FROM Study WHERE study_id = %s", (study_id,))
-    study = cur.fetchone()
+    try:
+        data = request.get_json()
+        title = data.get('name')
+        description = data.get('description')
+        raw_tags = data.get('hashtags', '')
+        max_members = data.get('capacity')
+        time = data.get('time')
+        image_base64 = data.get('image', '')  # ✅ base64 문자열
 
-    if not study or study['leader_id'] != session['user_id']:
-        flash('수정 권한이 없습니다.')
-        return redirect(url_for('study_detail', study_id=study_id))
+        tags = [tag.strip().lstrip('#').lower() for tag in raw_tags.split(',') if tag.strip()]
+        normalized_hashtags = ','.join(tags)
 
-    if request.method == 'POST':
-        title = request.form['title']
-        description = request.form['description']
-        hashtags = request.form['hashtags']
-        open_kakao_link = request.form.get('open_kakao_link', '')
-        max_members = request.form['max_members']
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT leader_id FROM Study WHERE study_id = %s", [study_id])
+        study = cur.fetchone()
 
-        try:
-            cur.execute("""
-                UPDATE Study
-                SET title=%s, description=%s, hashtags=%s, open_kakao_link=%s, max_members=%s
-                WHERE study_id = %s
-            """, (title, description, hashtags, open_kakao_link, max_members, study_id))
-            mysql.connection.commit()
-            flash('스터디 수정 완료')
-            return redirect(url_for('study_detail', study_id=study_id))
-        except Exception as e:
-            mysql.connection.rollback()
-            flash(f'수정 실패: {str(e)}')
-        finally:
+        if not study or study['leader_id'] != session['user_id']:
             cur.close()
+            return jsonify({'error': '수정 권한 없음'}), 403
 
-    return render_template('study_edit.html', study=study, study_id=study_id)
+        cur.execute("""
+            UPDATE Study
+            SET title = %s, description = %s, hashtags = %s,
+                max_members = %s, time = %s, image_base64 = %s
+            WHERE study_id = %s
+        """, (title, description, normalized_hashtags, max_members, time, image_base64, study_id))
+        mysql.connection.commit()
+        cur.close()
 
-# 스터디 삭제
-@app.route('/studies/<int:study_id>/delete', methods=['POST'])
-def delete_study(study_id):
+        return jsonify({'message': '스터디 수정 완료'})
+
+    except Exception as e:
+        return jsonify({'error': '수정 실패', 'detail': str(e)}), 500
+
+
+
+
+#스터디 삭제
+@app.route('/api/studies/<int:study_id>', methods=['DELETE'])
+def api_delete_study(study_id):
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
     cur = mysql.connection.cursor()
     cur.execute("SELECT leader_id FROM Study WHERE study_id = %s", (study_id,))
     study = cur.fetchone()
 
     if not study or study['leader_id'] != session['user_id']:
-        flash('삭제 권한이 없습니다.')
-        return redirect(url_for('study_detail', study_id=study_id))
+        cur.close()
+        return jsonify({'error': '삭제 권한 없음'}), 403
 
     try:
         cur.execute("UPDATE Study SET is_active = FALSE WHERE study_id = %s", (study_id,))
         mysql.connection.commit()
-        flash('스터디 삭제 완료')
-        return redirect(url_for('study_list'))
+        return jsonify({'message': '스터디 삭제 완료'})
     except Exception as e:
         mysql.connection.rollback()
-        flash(f'삭제 실패: {str(e)}')
+        return jsonify({'error': '삭제 실패', 'detail': str(e)}), 500
     finally:
         cur.close()
 
-# 댓글 추가
-@app.route('/studies/<int:study_id>/comments', methods=['POST'])
-def add_comment(study_id):
+
+#댓글목록
+@app.route('/api/comments', methods=['GET'])
+def api_get_comments():
+    study_id = request.args.get('study_id', type=int)
+    if not study_id:
+        return jsonify({'error': 'study_id가 필요합니다'}), 400
+
+    cur = mysql.connection.cursor()
+    cur.execute("""
+        SELECT c.comment_id AS id, c.study_id, c.author_id,
+        u.login_id AS author, c.content, c.created_at,
+        c.parent_id
+        
+        FROM Comment c
+        JOIN User u ON c.author_id = u.user_id
+        WHERE c.study_id = %s AND c.is_active = TRUE
+        ORDER BY c.created_at ASC
+    """, (study_id,))
+    rows = cur.fetchall()
+    cur.close()
+    return jsonify(rows)
+
+
+# ✅ 댓글 추가
+@app.route('/api/comments', methods=['POST'])
+def api_add_comment():
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
-    content = request.form['content']
+    data = request.get_json()
+    study_id = data.get('study_id')
+    content = data.get('content', '').strip()
+
+    if not study_id or not content:
+        return jsonify({'error': '유효하지 않은 요청'}), 400
+
     author_id = session['user_id']
-
     cur = mysql.connection.cursor()
     try:
-        cur.execute("INSERT INTO Comment (study_id, author_id, content, is_active) VALUES (%s, %s, %s, TRUE)",
-                    (study_id, author_id, content))
+        parent_id = data.get('parent_id')  #parent_id 받기
+        cur.execute("""
+            INSERT INTO Comment (study_id, author_id, content, parent_id, is_active)
+            VALUES (%s, %s, %s, %s, TRUE)
+        """, (study_id, author_id, content, parent_id))  
+
+        comment_id = cur.lastrowid
         mysql.connection.commit()
-        flash('댓글 등록 완료')
+        cur.execute("""
+            SELECT c.comment_id AS id, c.content, c.created_at,
+                c.author_id, u.login_id AS author,
+                c.parent_id
+            FROM Comment c JOIN User u ON c.author_id = u.user_id
+            WHERE c.comment_id = %s
+        """, (comment_id,))
+
+        new_comment = cur.fetchone()
+        return jsonify(new_comment), 201
     except Exception as e:
         mysql.connection.rollback()
-        flash(f'댓글 등록 실패: {str(e)}')
+        return jsonify({'error': '댓글 등록 실패', 'detail': str(e)}), 500
     finally:
         cur.close()
 
-    return redirect(url_for('study_detail', study_id=study_id))
 
-# 댓글 수정
-@app.route('/studies/<int:study_id>/comments/<int:comment_id>/edit', methods=['GET', 'POST'])
-def edit_comment(study_id, comment_id):
+# ✅ 댓글 수정
+@app.route('/api/comments/<int:comment_id>', methods=['PUT'])
+def api_edit_comment(comment_id):
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
+
+    data = request.get_json()
+    new_content = data.get('content', '').strip()
+
+    if not new_content:
+        return jsonify({'error': '내용이 비어있습니다'}), 400
 
     cur = mysql.connection.cursor()
-    cur.execute("SELECT content, author_id FROM Comment WHERE comment_id = %s", (comment_id,))
+    cur.execute("SELECT author_id FROM Comment WHERE comment_id = %s AND is_active = TRUE", (comment_id,))
     comment = cur.fetchone()
 
     if not comment or comment['author_id'] != session['user_id']:
-        flash('수정 권한이 없습니다.')
         cur.close()
-        return redirect(url_for('study_detail', study_id=study_id))
+        return jsonify({'error': '수정 권한이 없습니다'}), 403
 
-    if request.method == 'POST':
-        new_content = request.form['content']
-        try:
-            cur.execute("UPDATE Comment SET content = %s WHERE comment_id = %s", (new_content, comment_id))
-            mysql.connection.commit()
-            flash('댓글 수정 완료')
-            return redirect(url_for('study_detail', study_id=study_id))
-        except Exception as e:
-            mysql.connection.rollback()
-            flash(f'댓글 수정 실패: {str(e)}')
-        finally:
-            cur.close()
-    else:
-        cur.close()
-        return render_template(
-            'edit_comment.html',
-            study_id=study_id,
-            comment_id=comment_id,
-            content=comment['content']
-        )
-
-
-# 댓글 삭제
-@app.route('/studies/<int:study_id>/comments/<int:comment_id>/delete', methods=['POST'])
-def delete_comment(study_id, comment_id):
-    if 'user_id' not in session:
-        return redirect(url_for('login'))
-
-    cur = mysql.connection.cursor()
     try:
-        cur.execute("UPDATE Comment SET is_active = FALSE WHERE comment_id = %s", (comment_id,))
+        cur.execute("UPDATE Comment SET content = %s WHERE comment_id = %s", (new_content, comment_id))
         mysql.connection.commit()
-        flash('댓글 삭제 완료')
+        return jsonify({'message': '댓글 수정 완료'}), 200
     except Exception as e:
         mysql.connection.rollback()
-        flash(f'댓글 삭제 실패: {str(e)}')
+        return jsonify({'error': 'DB 오류', 'detail': str(e)}), 500
     finally:
         cur.close()
 
-    return redirect(url_for('study_detail', study_id=study_id))
+
+# ✅ 댓글 삭제
+@app.route('/api/comments/<int:comment_id>', methods=['DELETE'])
+def api_delete_comment(comment_id):
+    if 'user_id' not in session:
+        return jsonify({'error': '로그인 필요'}), 401
+
+    cur = mysql.connection.cursor()
+    cur.execute("SELECT author_id FROM Comment WHERE comment_id = %s AND is_active = TRUE", (comment_id,))
+    comment = cur.fetchone()
+
+    if not comment or comment['author_id'] != session['user_id']:
+        cur.close()
+        return jsonify({'error': '삭제 권한이 없습니다'}), 403
+
+    try:
+        cur.execute("UPDATE Comment SET is_active = FALSE WHERE comment_id = %s", (comment_id,))
+        mysql.connection.commit()
+        return jsonify({'message': '댓글 삭제 완료'}), 200
+    except Exception as e:
+        mysql.connection.rollback()
+        return jsonify({'error': '댓글 삭제 실패', 'detail': str(e)}), 500
+    finally:
+        cur.close()
+
+
 
 # ================= 알림 =================
 
@@ -663,10 +738,10 @@ def go_to_study_from_notification(notification_id):
     return redirect(f"/studies/{row['study_id']}")
 
 # ================= 스터디 신청 / 승인 =================
-@app.route('/study/<int:study_id>/apply', methods=['POST'])
-def apply_to_study(study_id):
+@app.route('/api/study/<int:study_id>/apply', methods=['POST'])
+def api_apply_to_study(study_id):
     if 'user_id' not in session:
-        return redirect(url_for('login'))
+        return jsonify({'error': '로그인 필요'}), 401
 
     user_id = session['user_id']
     cur = mysql.connection.cursor()
@@ -675,8 +750,7 @@ def apply_to_study(study_id):
     cur.execute("SELECT * FROM StudyMember WHERE study_id = %s AND user_id = %s", (study_id, user_id))
     if cur.fetchone():
         cur.close()
-        flash('⚠ 이미 신청한 스터디입니다.')
-        return redirect(url_for('study_detail', study_id=study_id))
+        return jsonify({'error': '이미 신청한 스터디입니다.'}), 400
 
     # 신청 insert
     cur.execute("INSERT INTO StudyMember (study_id, user_id, is_approved) VALUES (%s, %s, 0)", (study_id, user_id))
@@ -686,7 +760,6 @@ def apply_to_study(study_id):
     cur.execute("SELECT leader_id, title FROM Study WHERE study_id = %s", [study_id])
     study = cur.fetchone()
 
-    # 신청자 이름/학과 포함 알림 생성
     if study:
         leader_id = study['leader_id']
         title = study['title']
@@ -703,24 +776,21 @@ def apply_to_study(study_id):
 
     mysql.connection.commit()
     cur.close()
-    flash('✅ 스터디 신청이 완료되었습니다!')
-    return redirect(url_for('study_detail', study_id=study_id))
+    return jsonify({'message': '스터디 신청이 완료되었습니다!'})
 
-@app.route('/study/application/<int:study_member_id>', methods=['PUT'])
+@app.route('/api/study/application/<int:study_member_id>', methods=['PUT'])
 def decide_application(study_member_id):
     if 'user_id' not in session:
         return abort(403)
 
-    # 승인 or 거절 값 받기
     decision = request.get_json().get('decision')
     if decision not in ['approve', 'reject']:
         return jsonify({'error': 'invalid decision'}), 400
 
     cur = mysql.connection.cursor()
 
-    # 신청 정보 및 스터디 정보 확인
     cur.execute("""
-        SELECT sm.user_id, sm.study_id, s.leader_id, s.title, s.open_kakao_link
+        SELECT sm.user_id, sm.study_id, s.leader_id, s.title
         FROM StudyMember sm
         JOIN Study s ON sm.study_id = s.study_id
         WHERE sm.study_member_id = %s
@@ -731,29 +801,104 @@ def decide_application(study_member_id):
         cur.close()
         return abort(403)
 
-    # 신청자 정보
     applicant_id = result['user_id']
-    study_title = result['title']
     study_id = result['study_id']
-    link = result['open_kakao_link'] or '(스터디장에게 문의해주세요)'
+    study_title = result['title']
 
-    # 승인 or 거절 처리
     if decision == 'approve':
         cur.execute("UPDATE StudyMember SET is_approved = 1 WHERE study_member_id = %s", [study_member_id])
-        msg = f"[{study_title}] 스터디 신청이 승인되었습니다! 오픈카카오 링크: {link}"
+        msg = f"[{study_title}] 스터디 신청이 승인되었습니다!"
+        cur.execute("SELECT COALESCE(MAX(messageSequence), 0) + 1 AS seq FROM Chat WHERE study_id = %s", (study_id,))
+        next_seq = cur.fetchone()['seq']
+        cur.execute("""
+            INSERT INTO UserRoomStatus (user_id, study_id, in_room, first_messageSequence)
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE in_room = VALUES(in_room), first_messageSequence = VALUES(first_messageSequence)
+        """, (applicant_id, study_id, 1, next_seq))
     else:
         cur.execute("DELETE FROM StudyMember WHERE study_member_id = %s", [study_member_id])
         msg = f"[{study_title}] 스터디 신청이 거절되었습니다."
 
-    # 신청자에게 알림 전송
-    cur.execute("""
-        INSERT INTO Notification (user_id, message, study_id, is_read, created_at)
-        VALUES (%s, %s, %s, FALSE, NOW())
-    """, (applicant_id, msg, study_id))
-
     mysql.connection.commit()
     cur.close()
-    return jsonify({'message': '신청이 처리되었습니다.'})
+    return jsonify({'message': msg}), 200
+
+
+# 채팅방 조회
+@app.route('/api/mypage/<int:user_id>/chatrooms', methods=['GET'])
+def get_my_chatrooms(user_id):
+    if 'user_id' not in session or session['user_id'] != user_id:
+        return abort(403)
+
+    cur = mysql.connection.cursor()
+    # 1) 먼저 방 목록을 가져오고
+    cur.execute("""
+        SELECT s.study_id, s.title, s.description, s.hashtags, s.time, s.created_at
+        FROM UserRoomStatus urs
+        JOIN Study s ON urs.study_id = s.study_id
+        WHERE urs.user_id = %s AND urs.in_room = 1 AND s.is_active = TRUE
+        ORDER BY s.created_at DESC
+    """, (user_id,))
+    rooms = cur.fetchall()
+
+    # 2) 각 방마다 멤버 목록을 추가 조회해서 붙인다
+    for room in rooms:
+        cur.execute("""
+            SELECT u.user_id,
+                   m.name   AS nickname,
+                   m.student_id,
+                   m.major
+            FROM UserRoomStatus urs
+            JOIN User u ON urs.user_id = u.user_id
+            LEFT JOIN MyPage m ON u.user_id = m.user_id
+            WHERE urs.study_id = %s
+              AND urs.in_room = 1
+        """, (room['study_id'],))
+        room['members'] = cur.fetchall()
+
+    cur.close()
+    return jsonify(rooms)
+
+
+
+
+@app.route('/api/chatroom/<int:study_id>/members', methods=['GET'])
+def get_chatroom_members(study_id):
+    try:
+        if 'user_id' not in session:
+            return jsonify({'error': '로그인 필요'}), 401
+
+        user_id = session['user_id']
+        cur = mysql.connection.cursor()
+
+        cur.execute("""
+            SELECT 1 FROM UserRoomStatus
+            WHERE user_id = %s AND study_id = %s
+        """, (user_id, study_id))
+        if not cur.fetchone():
+            cur.close()
+            return jsonify({'error': '접근 권한 없음'}), 403
+
+        # LEFT JOIN 으로 수정
+        cur.execute("""
+            SELECT u.user_id, m.name AS nickname,
+                   m.student_id, m.major
+            FROM UserRoomStatus urs
+            JOIN User u ON urs.user_id = u.user_id
+            LEFT JOIN MyPage m ON u.user_id = m.user_id
+            WHERE urs.study_id = %s
+              AND urs.in_room = 1
+        """, (study_id,))
+        rows = cur.fetchall()
+        cur.close()
+        return jsonify(rows)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': '서버 내부 오류', 'details': str(e)}), 500
+
+
 
 
 # ================= 채팅 =================
@@ -769,62 +914,108 @@ def handle_join(data):
     user_id = session['user_id']
     login_id = session['login_id']
     join_room(room)
+
     cur = mysql.connection.cursor()
-    cur.execute("SELECT COALESCE(MAX(messageSequence), 0) FROM Chat WHERE study_id = %s", (room,))
-    last_seq = cur.fetchone()['COALESCE(MAX(messageSequence), 0)']
-    next_seq = last_seq + 1
+
+    # 기존에 join 기록이 있으면 그대로 사용
     cur.execute("""
-        INSERT INTO UserRoomStatus (user_id, study_id, first_messageSequence)
-        VALUES (%s, %s, %s)
-        ON DUPLICATE KEY UPDATE first_messageSequence = VALUES(first_messageSequence)
-    """, (user_id, room, next_seq))
-    mysql.connection.commit()
+        SELECT first_messageSequence FROM UserRoomStatus 
+        WHERE user_id = %s AND study_id = %s
+    """, (user_id, room))
+    row = cur.fetchone()
+
+    if row:
+        first_messageSequence = row['first_messageSequence']
+    else:
+        # 없으면 처음부터 (0)로 시작
+        first_messageSequence = 0
+        cur.execute("""
+            INSERT INTO UserRoomStatus (user_id, study_id, first_messageSequence)
+            VALUES (%s, %s, %s)
+        """, (user_id, room, first_messageSequence))
+        mysql.connection.commit()
+
+    # 이전 메시지 가져오기
     cur.execute("""
         SELECT c.user_id, u.login_id, c.message, c.messageSequence
         FROM Chat c JOIN User u ON c.user_id = u.user_id
         WHERE c.study_id = %s AND c.messageSequence >= %s
         ORDER BY c.messageSequence ASC
-    """, (room, next_seq))
-    for msg in cur.fetchall():
-        emit('message', {
-            'login_id': msg['login_id'],
-            'message': msg['message'],
-            'messageSequence': msg['messageSequence']
-        })
+    """, (room, first_messageSequence))
+    cur.execute("""
+        SELECT c.user_id,
+               u.login_id,
+               c.message,
+               c.messageSequence,
+               c.created_at
+        FROM Chat c
+        JOIN User u ON c.user_id = u.user_id
+        WHERE c.study_id = %s
+          AND c.messageSequence >= %s
+        ORDER BY c.messageSequence ASC
+    """, (room, first_messageSequence))
+    messages = cur.fetchall()
     cur.close()
+
+    for msg in messages:
+        emit('message', {
+            'user_id':         msg['user_id'],
+            'login_id':        msg['login_id'],
+            'message':         msg['message'],
+            'messageSequence': msg['messageSequence'],
+            'created_at':      msg['created_at'].isoformat(),  # or str(msg['created_at'])
+            'study_id':        room
+        })
+
+
     emit('status', {'msg': f'{login_id}님이 입장했습니다.'}, room=room)
 
 @socketio.on('message')
 def handle_message(data):
     room = data['study_id']
     message = data['message']
-    user_id = session['user_id']
-    login_id = session['login_id']
+    user_id = data['user_id']          # ✅ session 대신
+    login_id = data['login_id']        # ✅ session 대신
+
     cur = mysql.connection.cursor()
     cur.execute("SELECT COALESCE(MAX(messageSequence), 0) + 1 AS seq FROM Chat WHERE study_id = %s", (room,))
     seq = cur.fetchone()['seq']
-    cur.execute("INSERT INTO Chat (study_id, user_id, message, messageSequence) VALUES (%s, %s, %s, %s)",
-                (room, user_id, message, seq))
+    cur.execute(
+        "INSERT INTO Chat (study_id, user_id, message, messageSequence) VALUES (%s, %s, %s, %s)",
+        (room, user_id, message, seq)
+    )
     mysql.connection.commit()
+    # 방금 INSERT 된 row의 created_at 을 다시 조회
+    cur.execute("""
+        SELECT created_at
+        FROM Chat
+        WHERE study_id = %s AND messageSequence = %s
+    """, (room, seq))
+    created_at = cur.fetchone()['created_at']
     cur.close()
     emit('message', {
-        'login_id': login_id,
-        'message': message,
-        'messageSequence': seq
+        'user_id':         user_id,
+        'login_id':        login_id,
+        'message':         message,
+        'messageSequence': seq,
+        'created_at':      created_at.isoformat(),
+        'study_id':        room
     }, room=room)
+
+
 
 @socketio.on('leave')
 def handle_leave(data):
     room = data['study_id']
     user_id = session['user_id']
     login_id = session['login_id']
-    cur = mysql.connection.cursor()
-    cur.execute("SELECT MAX(messageSequence) FROM Chat WHERE study_id = %s", (room,))
-    last_seq = cur.fetchone()['MAX(messageSequence)'] or 0
-    cur.execute("UPDATE UserRoomStatus SET first_messageSequence = %s WHERE user_id = %s AND study_id = %s",
-                (last_seq, user_id, room))
-    mysql.connection.commit()
-    cur.close()
+    # cur = mysql.connection.cursor()
+    # cur.execute("SELECT MAX(messageSequence) FROM Chat WHERE study_id = %s", (room,))
+    # last_seq = cur.fetchone()['MAX(messageSequence)'] or 0
+    # cur.execute("UPDATE UserRoomStatus SET first_messageSequence = %s WHERE user_id = %s AND study_id = %s",
+    #             (last_seq, user_id, room))
+    # mysql.connection.commit()
+    # cur.close()
     leave_room(room)
     emit('status', {'msg': f'{login_id}님이 퇴장했습니다.'}, room=room)
 

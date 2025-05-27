@@ -30,7 +30,7 @@
 
     <!-- 페이지네이션 -->
     <nav class="pagination">
-      <button :disabled="currentPage === 1" @click="currentPage--">←</button>
+      <button :disabled="currentPage === 1" @click="currentPage--"><<</button>
       <button
         v-for="p in totalPages"
         :key="p"
@@ -39,11 +39,11 @@
       >
         {{ p }}
       </button>
-      <button :disabled="currentPage === totalPages" @click="currentPage++">→</button>
+      <button :disabled="currentPage === totalPages" @click="currentPage++">>></button>
     </nav>
 
     <!-- ➕ 등록 버튼 -->
-    <button class="write-button" @click="goToWrite">➕ 스터디 등록</button>
+    <button class="write-button" @click="goToWrite">+ 스터디 등록</button>
   </div>
 </template>
 
@@ -52,12 +52,14 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 
+// ✅ public/images 디렉토리에 둘 경우 아래와 같이 상대 경로로 접근
+const defaultImage = '/images/default_study.png'
+
 const router = useRouter()
 const searchKeyword = ref('')
 const studyList = ref([])
 const currentPage = ref(1)
 const pageSize = 6
-const defaultImage = '/default.jpg'
 
 function goToWrite() {
   router.push('/study/write')
@@ -70,11 +72,11 @@ function goToDetail(id) {
 async function fetchStudies() {
   try {
     const res = await axios.get('/api/studies', {
-      params: { query: searchKeyword.value }
+      params: { keyword: searchKeyword.value }
     })
     studyList.value = res.data.map((item) => ({
       ...item,
-      image: item.image || defaultImage
+      image: (!item.image || item.image.trim() === '') ? defaultImage : item.image
     }))
   } catch (err) {
     console.error('스터디 목록 불러오기 실패', err)
@@ -112,6 +114,7 @@ onMounted(() => {
   fetchStudies()
 })
 </script>
+
 
 <style scoped>
 .list-page {
@@ -191,8 +194,8 @@ onMounted(() => {
 }
 .write-button {
   position: fixed;
-  bottom: 32px;
-  right: 32px;
+  bottom: 50px;
+  right: 50px;
   background-color: #42b983;
   color: white;
   border: none;

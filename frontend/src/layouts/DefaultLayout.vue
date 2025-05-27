@@ -5,9 +5,9 @@
                 <a href="/" class="logo-link">SSU-TUDY</a>
             </div>
             <div class="header-right">
-                <span v-if="!state.isLoggedIn" @click="openLoginModal" class="clickable">로그인</span>
+                <span v-if="!state.isLoggedIn" @click="openLoginModal" class="clickable-log">로그인</span>
                 <span v-else>
-                    <span class="clickable" @click="logout">로그아웃</span>
+                    <span class="clickable-log" @click="logout">로그아웃</span>
                     <span class="icon clickable" @click="togglePanel('alarm')">🔔</span>
                     <span class="icon clickable" @click="togglePanel('chat')">💬</span>
                     <span class="icon clickable" @click="togglePanel('profile')">👤</span>
@@ -89,21 +89,25 @@
                                 :class="{ unread: !alarm.is_read }"
                             >
                                 <div class="alarm-message">{{ alarm.message }}</div>
+                                <div class="alarm-actions">
+                                    <button class="alarm-btn approve" @click="handleDecision(alarm, 'approve')">✔️승인</button>
+                                    <button class="alarm-btn reject" @click="handleDecision(alarm, 'reject')">❌거절</button>
+                                </div>
                                 <div class="alarm-time">{{ alarm.time }}</div>
                             </div>
                         </div>
                     </template>
                 </div>
-
                 <div v-else-if="state.panelType === 'chat'">
                     <div class="chat-room-list">
                         <div
                             v-for="room in state.chatRooms"
                             :key="room.id"
-                            class="chat-room-item"
+                            class="chat-room-card"
                             @click="openChat(room)"
                         >
-                            💬 {{ room.name }}
+                            <h4>💬 {{ room.name }}</h4>
+                            <p>{{ room.description }}</p>
                         </div>
                     </div>
                 </div>
@@ -156,6 +160,25 @@
                             <button @click="cancelEdit">❌ 취소</button>
                         </div>
                     </div>
+
+                    <div class="profile-item">
+                        <label>📚 내가 만든 스터디</label>
+                        <div v-if="state.createdStudies.length === 0">
+                            <span>아직 생성한 스터디가 없습니다.</span>
+                        </div>
+                        <div v-else class="mypage-study-list">
+                            <div
+                            v-for="(study, idx) in state.createdStudies"
+                            :key="idx"
+                            class="mypage-study-card"
+                            @click="changeToDetail(study.study_id)"
+                            >
+                            <h4>{{ study.title }}</h4>
+                            <p>{{ study.description }}</p>
+                            </div>
+                        </div>
+                    </div>
+
 
                 </div>
             </div>
@@ -251,9 +274,9 @@
                 <span>{{ state.activeChatRoom?.name }}</span>
                 <button @click="closeChatPopup">❌</button>
             </div>
-            <div class="chat-body">
+            <div class="chat-body" ref="chatBodyRef">
                 <div
-                    v-for="(msg, i) in state.chatMessages[state.activeChatRoom?.id]"
+                    v-for="(msg, i) in state.chatMessages"
                     :key="i"
                     :class="['chat-msg-container', msg.from === state.userId ? 'mine' : 'theirs']"
                 >
@@ -293,13 +316,21 @@
 </template>
 
 <script setup>
-import { reactive, onMounted, ref, nextTick, watchEffect } from 'vue'
+import { reactive, onMounted, ref, nextTick, watchEffect, watch } from 'vue'
 import { useToast } from 'vue-toastification'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
+import { io } from 'socket.io-client'
 
+const router = useRouter()
 const toast = useToast()
 const chatPopupRef = ref(null)
 const chatHeaderRef = ref(null)
+const chatBodyRef = ref(null)
+
+// 서버 주소에 따라 수정 (localhost 또는 배포 주소)
+const socket = io('http://localhost:5000', { withCredentials: true })
+let messageHandlerRegistered = false
 
 const state = reactive({
     isLoggedIn: false,
@@ -336,21 +367,10 @@ const state = reactive({
         hashtagList: ['#']
     },
     //일단 mock
-    chatRooms: [
-        { id: 1, name: 'AI융합스터디' },
-        { id: 2, name: '웹프론트엔드' },
-    ],
+    chatRooms: [],
     showChatPopup: false,
     activeChatRoom: null,
-    chatMessages: {
-        1: [
-            { from: 1, text: '안녕하세요!', timestamp: new Date(Date.now() - 12000 * 60) },
-            { from: 2, text: '반갑습니다', timestamp: new Date(Date.now() - 1000 * 60) }
-        ],
-        2: [
-            { from: 1, text: 'Vue 공부중이에요', timestamp: new Date(Date.now() - 1000 * 60) }
-        ]
-    },
+    chatMessages: [],
     newMessage: '',
     userId: '',
     userName: '',
@@ -359,14 +379,20 @@ const state = reactive({
         login_id: '',
         student_id: '',
         new_password: ''
-    }
+    },
+    createdStudies: []  // 내가 만든 스터디
 })
 
-// Mock: 사용자 정보
-const userMap = {
-  1: { nickname: 'choi123', studentId: '20231234', major: 'AI융합학과' },
-  2: { nickname: 'kim456', studentId: '20231235', major: '소프트웨어' },
-  3: { nickname: 'lee789', studentId: '20231236', major: '정보보안' },
+const userMap = {}
+
+// 스크롤 맨 아래로
+function scrollToBottom() {
+  const el = chatBodyRef.value
+  if (!el) return
+  // DOM 업데이트 끝난 뒤에
+  nextTick(() => {
+    el.scrollTop = el.scrollHeight
+  })
 }
 
 // 각 유저에 고유 색상 매핑 (단순 해시)
@@ -381,6 +407,7 @@ const getProfileInitial = (id) => {
 }
 
 onMounted(async () => {
+    // 로그인 세션 확인
     try {
         const res = await axios.get('/api/session-check', { withCredentials: true })
         if (res.data.is_logged_in) {
@@ -391,12 +418,21 @@ onMounted(async () => {
     } catch (e) {
         console.error('세션 확인 실패:', e)
     }
-    setInterval(() => {
-        if (state.isLoggedIn) {
-            fetchAlarms()
-        }
-    }, 10000) // 10초마다
+
+    // ✅ localStorage에서 toastMessage 있으면 띄우고 지움
+    const msg = localStorage.getItem('toastMessage')
+    if (msg) {
+        toast.success(msg)
+        localStorage.removeItem('toastMessage')
+    }
 })
+
+watch(
+  () => state.chatMessages.length,
+  () => {
+    scrollToBottom()
+  }
+)
 
 watchEffect(() => {
   if (state.showChatPopup) {
@@ -664,12 +700,17 @@ async function login() {
         })
 
         // 로그인 성공
+        state.id = ''
+        state.pw = ''
         state.userId = res.data.user_id
         state.userName = res.data.login_id
         state.isLoggedIn = true
         state.showLogin = false
-        toast.success('로그인 완료!')
+        localStorage.setItem('toastMessage', '로그인 완료!')
+        window.location.reload()
     } catch (err) {
+        state.id = ''
+        state.pw = ''
         console.error(err)
         if (err.response?.status === 401) {
             toast.error('아이디 또는 비밀번호가 잘못되었습니다.')
@@ -677,15 +718,16 @@ async function login() {
             toast.error('서버 오류가 발생했습니다.')
         }
     }
-    state.id = ''
-    state.pw = ''
 }
 
 async function logout() {
     try {
         await axios.post('/api/logout', {}, { withCredentials: true })
         state.isLoggedIn = false
-        toast.success('로그아웃 되었습니다!')
+        state.chatMessages = []
+        messageHandlerRegistered = false
+        localStorage.setItem('toastMessage', '로그아웃 되었습니다!')
+        window.location.reload()
     } catch (e) {
         console.error('로그아웃 실패:', e)
         toast.error('로그아웃 실패')
@@ -705,6 +747,8 @@ async function togglePanel(type){
             await fetchAlarms() // 알람만 열릴 때 호출
         } else if (type === 'profile') {
             await fetchMyPage()
+        } else if (type === 'chat') {
+            await fetchChat()
         }
     }
 }
@@ -771,6 +815,7 @@ async function fetchAlarms() {
 
         state.alarms = data.map(alarm => ({
             id: alarm.notification_id,
+            study_member_id: alarm.study_member_id,
             message: alarm.message,
             is_read: alarm.is_read,
             time: formatKoreanTime(alarm.created_at)
@@ -800,45 +845,32 @@ async function fetchMyPage() {
         console.error('마이페이지 불러오기 실패:', e)
         toast.error('마이페이지 정보를 불러올 수 없습니다.')
     }
-}
+    // 내가 만든 스터디도 가져오기
+    try {
+        const studyRes = await axios.get(`/api/mypage/${state.userId}/created-studies`, { withCredentials: true })
+        state.createdStudies = studyRes.data || []
+    } catch (e) {
+        console.error('내가 만든 스터디 불러오기 실패:', e)
+    }
 
+}
 
 function closePanel() {
     state.showPanel = false
 }
 
-function openChat(room) {
-    state.activeChatRoom = room
-    state.showChatPopup = true
-}
-
 function closeChatPopup() {
-    state.showChatPopup = false
-    state.newMessage = ''
-}
+  if (state.activeChatRoom) {
+    socket.emit('leave', { study_id: state.activeChatRoom.id });
+  }
+  state.showChatPopup = false;
+  state.newMessage = '';
+  state.chatMessages = [];
 
-function sendMessage() {
-    const text = state.newMessage.trim()
-    if (!text || !state.activeChatRoom) return
-
-    const roomId = state.activeChatRoom.id
-    if (!state.chatMessages[roomId]) state.chatMessages[roomId] = []
-
-    state.chatMessages[roomId].push({
-        from: state.userId,
-        text,
-        timestamp: new Date()  // 시간 정보 추가
-    })
-    state.newMessage = ''
-
-    // Mock 받은 메시지
-    setTimeout(() => {
-        state.chatMessages[roomId].push({
-            from: 2,
-            text: '답변이에요!',
-            timestamp: new Date()
-        })
-    }, 1000)
+  // ← 추가: 이벤트 핸들러 해제
+  socket.off('message');
+  socket.off('status');
+  messageHandlerRegistered = false;
 }
 
 function formatTime(date) {
@@ -857,6 +889,115 @@ function formatKoreanTime(isoString) {
     const period = hour < 12 ? '오전' : '오후'
     const formattedHour = hour % 12 || 12
     return `${period} ${formattedHour}:${minutes}`
+}
+
+function changeToDetail(id) {
+  router.push(`/study/${id}`)
+}
+
+async function handleDecision(alarm, decision) {
+  if (!['approve', 'reject'].includes(decision)) return
+
+  try {
+    const studyMemberId = alarm.study_member_id
+    if (!studyMemberId) {
+    toast.error('승인 대상이 유효하지 않습니다.')
+    return
+    }
+
+    const res = await axios.put(
+    `/api/study/application/${studyMemberId}`,  // ✅ 올바른 ID로 요청
+    { decision },
+    {
+        headers: { 'Content-Type': 'application/json' },
+        withCredentials: true
+    }
+    )
+    toast.success(`스터디 신청이 ${decision === 'approve' ? '승인' : '거절'}되었습니다.`)
+
+    // 알림 목록에서 해당 항목 제거 (선택)
+    state.alarms = state.alarms.filter(a => a.id !== alarm.id)
+  } catch (err) {
+    console.error(`신청 ${decision} 실패:`, err)
+    toast.error('처리 중 오류가 발생했습니다.')
+  }
+}
+
+async function fetchChat() {
+  if (!state.userId) return;
+
+  try {
+    const res = await axios.get(
+      `/api/mypage/${state.userId}/chatrooms`,
+      { withCredentials: true }
+    );
+
+    // 서버에서 내려준 members 배열까지 한꺼번에 매핑
+    state.chatRooms = res.data.map(room => ({
+      id:          room.study_id,
+      name:        room.title,
+      description: room.description,
+      hashtags:    room.hashtags,
+      time:        room.time,
+      createdAt:   room.created_at,
+      members:     room.members  // ← 방장/참여자 프로필 배열
+    }));
+
+    // 미리 userMap 에 넣어두면 openChat 시 getChatProfile 은 더 이상 불필요
+    state.chatRooms.forEach(room => {
+      room.members.forEach(m => {
+        userMap[m.user_id] = {
+          nickname:  m.nickname,
+          studentId: m.student_id,
+          major:     m.major
+        };
+      });
+    });
+
+    console.log('채팅방 목록 + 멤버 로드 완료:', state.chatRooms);
+  } catch (err) {
+    console.error('채팅방 목록 불러오기 실패:', err);
+    toast.error('채팅방 정보를 불러오는 데 실패했습니다.');
+  }
+}
+
+async function openChat(room) {
+  state.chatMessages     = []
+  state.activeChatRoom   = room
+  state.showChatPopup    = true
+
+  // listener 는 최초 한 번만 등록
+  if (!messageHandlerRegistered) {
+    socket.on('message', msg => {
+      state.chatMessages.push({
+        from:      msg.user_id,
+        text:      msg.message,
+        timestamp: new Date(msg.created_at)
+      });
+    });
+    socket.on('status', st => console.log(st.msg));
+    messageHandlerRegistered = true;
+  }
+
+  // 과거 메시지 전송 트리거
+  socket.emit('join', { study_id: room.id });
+}
+
+function sendMessage() {
+  const text = state.newMessage.trim();
+  if (!text || !state.activeChatRoom) return;
+
+  socket.emit('message', {
+    study_id:  state.activeChatRoom.id,
+    message:   text,
+    user_id:   state.userId,
+    login_id:  state.userName
+  });
+
+  state.newMessage = '';
+  // 이 아래 두 줄, join 재호출은 제거합니다.
+  // state.chatMessages = [];
+  // socket.emit('join', { study_id: state.activeChatRoom.id });
 }
 
 </script>
@@ -924,9 +1065,12 @@ function formatKoreanTime(isoString) {
     .icon {
         font-size: 18px;
     }
+    .clickable-log {
+        cursor: pointer;        
+        text-decoration: underline;
+    }
     .clickable {
         cursor: pointer;
-        text-decoration: underline;
     }
     /* 사이드 패널 */
     .side-panel {
@@ -1451,8 +1595,105 @@ function formatKoreanTime(isoString) {
         margin-top: 4px;
         font-size: 12px;
         color: #888;
+        text-align: right;
     }
 
+    .mypage-study-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 8px;
+    }
 
+    .mypage-study-card {
+        padding: 12px;
+        background-color: #f5f5f5;
+        border-left: 4px solid #42b983;
+        border-radius: 8px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+        cursor: pointer;
+        transition: background-color 0.2s ease;
+    }
 
+    .mypage-study-card:hover {
+        background-color: #e0f7ec;
+    }
+
+    .mypage-study-card h4 {
+        margin: 0 0 6px 0;
+        font-size: 16px;
+        color: #2c3e50;
+    }
+
+    .mypage-study-card p {
+        margin: 0;
+        font-size: 14px;
+        color: #555;
+    }
+
+    .alarm-actions {
+        display: flex;
+        justify-content: flex-end;  /* 👉 버튼들을 오른쪽으로 정렬 */
+        gap: 8px;
+        margin-top: 8px;
+    }
+
+    .alarm-btn {
+        padding: 6px 10px;
+        border: none;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .alarm-btn.approve {
+        background-color: #42b983;
+        color: white;
+    }
+
+    .alarm-btn.approve:hover {
+        background-color: #369f6b;
+    }
+
+    .alarm-btn.reject {
+        background-color: #f76c6c;
+        color: white;
+    }
+
+    .alarm-btn.reject:hover {
+        background-color: #d9534f;
+    }
+
+    .chat-room-card {
+        padding: 12px 16px;
+        border-radius: 8px;
+        background-color: #f9f9f9;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        cursor: pointer;
+        transition: background-color 0.2s;
+        margin-bottom: 10px;
+    }
+
+    .chat-room-card:hover {
+        background-color: #eefcf7;
+    }
+
+    .chat-room-card h4 {
+        margin: 0;
+        font-size: 15px;
+        color: #2c3e50;
+    }
+
+    .chat-room-card p {
+        margin: 6px 0 4px 0;
+        font-size: 13px;
+        color: #555;
+    }
+
+    .chat-room-card small {
+        font-size: 12px;
+        color: #999;
+    }
 </style>
